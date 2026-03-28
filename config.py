@@ -10,10 +10,10 @@ ASSET_DIR = BASE_DIR / "assets"
 for directory in (OUTPUT_DIR, EDITED_DIR, PREVIEW_DIR, MESH_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
-APP_HOST = "0.0.0.0"
+APP_HOST = "127.0.0.1"
 APP_PORT = 7860
 
-TRELLIS_API_URL = "http://100.66.5.110:8000/v1/infer"
+TRELLIS_API_URL = "http://localhost:8000/v1/infer"
 TRELLIS_TIMEOUT_SECONDS = 600
 TRELLIS_MAX_IMAGE_SIZE = 1024
 TRELLIS_JPEG_QUALITY = 92
