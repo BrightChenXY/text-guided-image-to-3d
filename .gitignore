@@ -1,0 +1,47 @@
+# Python cache
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment / local config
+.env
+.env.*
+*.local
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Generated outputs
+outputs/edited/
+outputs/meshes/
+outputs/previews/
+
+# Optional: model checkpoints or large binaries
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+*.bin
+
+# Optional: temporary files
+*.tmp
+*.temp

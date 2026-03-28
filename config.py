@@ -1,0 +1,28 @@
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+OUTPUT_DIR = BASE_DIR / "outputs"
+EDITED_DIR = OUTPUT_DIR / "edited"
+PREVIEW_DIR = OUTPUT_DIR / "previews"
+MESH_DIR = OUTPUT_DIR / "meshes"
+ASSET_DIR = BASE_DIR / "assets"
+
+for directory in (OUTPUT_DIR, EDITED_DIR, PREVIEW_DIR, MESH_DIR):
+    directory.mkdir(parents=True, exist_ok=True)
+
+APP_HOST = "0.0.0.0"
+APP_PORT = 7860
+
+TRELLIS_API_URL = "http://100.66.5.110:8000/v1/infer"
+TRELLIS_TIMEOUT_SECONDS = 600
+TRELLIS_MAX_IMAGE_SIZE = 1024
+TRELLIS_JPEG_QUALITY = 92
+TRELLIS_REQUEST_RETRIES = 2
+
+INSTRUCT_PIX2PIX_MODEL_ID = "timbrooks/instruct-pix2pix"
+PREPROCESS_SIZE = 512
+
+DEFAULT_STEPS = 20
+DEFAULT_GUIDANCE_SCALE = 7.5
+DEFAULT_IMAGE_GUIDANCE_SCALE = 1.5
+DEFAULT_SEED = 0

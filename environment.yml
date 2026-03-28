@@ -1,0 +1,22 @@
+name: text-guided-image-to-3d
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip>=24.0
+  - pytorch>=2.2,<2.6
+  - torchvision>=0.17,<0.21
+  - numpy>=1.26,<2.0
+  - pip:
+      - accelerate>=0.33,<1.0
+      - diffusers>=0.31,<0.36
+      - gradio>=4.44,<5.0
+      - huggingface_hub>=0.24,<1.0
+      - pillow>=10.4,<11.0
+      - protobuf>=4.25,<6.0
+      - requests>=2.31,<3.0
+      - safetensors>=0.4.3,<1.0
+      - scipy>=1.11,<2.0
+      - sentencepiece>=0.2,<1.0
+      - transformers>=4.44,<4.49
