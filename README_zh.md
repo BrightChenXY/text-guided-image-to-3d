@@ -197,12 +197,12 @@ curl -X POST http://localhost:8000/v1/infer \
 
 ### Step 7: 让前端连接后端
 
-在 NIM 容器启动后，请更新 `config.py` 中的 TRELLIS 后端地址，确保本地 Gradio 应用把生成请求发送到正确的主机和端口。
+在 NIM 容器启动后，请更新 **`config.py`** 中的 TRELLIS 后端地址，确保本地 Gradio 应用把生成请求发送到正确的主机和端口。
 
 典型的本地部署配置如下：
 
 ```python
-TRELLIS_BASE_URL = "http://localhost:8000" # Change it to your API URL
+TRELLIS_BASE_URL = "http://localhost:8000/v1/infer" # Change it to your API
 ```
 
 如果后端运行在另一台 Linux 或 WSL 机器上，请将 `localhost` 替换为该机器可访问的 IP 或主机名。

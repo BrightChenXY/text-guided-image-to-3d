@@ -45,3 +45,4 @@ checkpoints/
 # Optional: temporary files
 *.tmp
 *.temp
+config.py

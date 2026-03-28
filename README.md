@@ -177,11 +177,11 @@ curl -X POST http://localhost:8000/v1/infer \
 In this repository, that API call is typically wrapped by `pipelines/trellis_client.py`, so your app code does not need to manually construct curl requests during normal usage. The backend URL should be kept in `config.py`. This is an integration detail of this repo; the request structure itself follows NVIDIA’s published TRELLIS NIM examples.
 
 ### Step 7: Point the frontend to the backend
-After the NIM container is running, update the TRELLIS backend URL in config.py so the local Gradio app sends generation requests to the correct host and port.
+After the NIM container is running, update the TRELLIS backend URL in **`config.py`** so the local Gradio app sends generation requests to the correct host and port.
 
 Typical local deployment:
 ```Python
-TRELLIS_BASE_URL = "http://localhost:8000" # Change it to your API URL
+TRELLIS_BASE_URL = "http://localhost:8000/v1/infer" # Change it to your API
 ```
 If the backend is running on another Linux/WSL machine, replace localhost with that machine’s reachable IP or hostname.
 
