@@ -1,8 +1,8 @@
 # text-guided-image-to-3d
 
-[English](README.md) | [简体中文]
+[English](README.md) | [简体中文](README_zh.md)
 
-一个基于 Gradio 的演示项目，用于通过 InstructPix2Pix 进行文本引导图像编辑，并调用远程 TRELLIS 后端生成 3D 模型。
+一个基于 Gradio 的演示项目，支持通过 InstructPix2Pix 进行文本引导图像编辑，并通过 TRELLIS NVIDIA NIM 远程后端生成 3D 结果。可直接查看 [Quickstart](#quickstart)。
 
 ## Features
 
@@ -14,7 +14,7 @@
 
 ## Project Structure
 
-- `app.py`: Gradio 界面与整体流程编排。
+- `app.py`: Gradio 界面与端到端流程编排。
 - `config.py`: 运行配置、输出目录、模型 ID 与 TRELLIS 接口地址。
 - `pipelines/`: 图像预处理、InstructPix2Pix 编辑与 TRELLIS 客户端逻辑。
 - `assets/`: 静态资源目录。
@@ -28,9 +28,10 @@
 - 需要能够联网下载模型依赖，并访问已配置的 TRELLIS 后端服务。
 - 建议使用支持 CUDA 的 GPU 以获得更快的本地 InstructPix2Pix 推理速度，CPU 也可运行但会更慢。
 
-## Quickstart
+# Quickstart<a id="quickstart"></a>
+## ① 安装依赖
 
-### conda setup
+### `conda` setup *(推荐)*
 
 ```bash
 git clone https://github.com/BrightChenXY/text-guided-image-to-3d.git
@@ -41,7 +42,7 @@ conda activate text-guided-image-to-3d
 
 如果你本地修改了 `environment.yml` 里的环境名称，请激活修改后的实际名称，或者先把文件中的名称改回再创建环境。
 
-### uv setup
+### `uv` setup *(推荐)*
 
 ```bash
 git clone https://github.com/BrightChenXY/text-guided-image-to-3d.git
@@ -55,7 +56,7 @@ uv sync
 
 这个仓库按非打包应用方式配置了 `uv`（`tool.uv.package = false`），因此优先推荐使用 `uv sync`。如果你更习惯基于 `requirements.txt` 的流程，或者本地 `uv` 版本在当前结构下不适合使用 `sync`，也可以改用 `uv pip install -r requirements.txt`。
 
-### pip setup
+### `pip` setup *(不推荐)*
 
 ```bash
 git clone https://github.com/BrightChenXY/text-guided-image-to-3d.git
@@ -69,8 +70,144 @@ pip install -r requirements.txt
 
 请确认当前环境中的 `python` 指向 Python 3.10。
 
+## ② 部署 TRELLIS 后端
 
-## Running the App
+### 后端前置条件
+
+在启动容器之前，请确认后端机器具备以下条件：
+
+- 已安装 Docker，并启用了 NVIDIA GPU 支持。
+- 容器运行时可以访问 NVIDIA GPU。
+- 拥有用于拉取 NIM 容器的 **NGC API key**。
+- 首次启动时可以联网，以便容器下载模型并完成预热。
+- 宿主环境为 Linux 或 WSL2。
+
+NVIDIA 的 Visual GenAI NIM 文档要求使用 **NGC personal API key**，并在拉取容器前通过 NVIDIA NGC 完成认证。文档同时说明 Visual GenAI NIM 可以运行在 **WSL** 上，而 WSL 支持目前处于 **Public Beta** 阶段。:contentReference[oaicite:2]{index=2}
+
+### Step 1: 导出 NGC API key
+
+你可以在这里获取 API key：https://build.nvidia.com/microsoft/trellis
+
+```bash
+export NGC_API_KEY="<PASTE_YOUR_NGC_API_KEY_HERE>"
+```
+
+NVIDIA 的 NIM 文档使用 `$oauthtoken` 作为用户名，并将 NGC API key 作为容器镜像仓库登录密码。
+
+### Step 2: 登录 NVIDIA NGC
+
+```bash
+echo "$NGC_API_KEY" | docker login nvcr.io --username '$oauthtoken' --password-stdin
+```
+
+### Step 3: 创建本地 NIM 缓存目录
+
+```bash
+export LOCAL_NIM_CACHE=~/.cache/nim
+mkdir -p "$LOCAL_NIM_CACHE"
+chmod 777 "$LOCAL_NIM_CACHE"
+```
+
+该缓存目录会挂载到容器内，这样模型文件和预热产物就不需要每次重新下载。NVIDIA 的部署页面和快速开始文档都建议将本地缓存挂载到 `/opt/nim/.cache/`。
+
+### Step 4: 启动 TRELLIS NIM 容器
+
+```bash
+docker run -it --rm --name=nim-server \
+  --runtime=nvidia --gpus='"device=0"' \
+  -e NGC_API_KEY=$NGC_API_KEY \
+  -e NIM_MODEL_VARIANT=large:text+large:image \
+  -p 8000:8000 \
+  -v "$LOCAL_NIM_CACHE:/opt/nim/.cache/" \
+  nvcr.io/nim/microsoft/trellis:latest
+```
+
+这会在 `8000` 端口启动 TRELLIS NIM 服务。首次启动时，容器会下载模型、初始化推理流程并执行预热。Visual GenAI NIM 的通用快速开始文档提到，只有在日志出现 `Pipeline warmup: start/done` 后，服务才算真正就绪。
+
+如果你想控制加载的 TRELLIS 变体，可以修改参数 `-e NIM_MODEL_VARIANT=<variant>`：
+
+- `base:text`
+- `large:text`
+- `large:image`
+- `large:text+large:image`
+
+### Step 5: 检查服务是否就绪
+
+```bash
+curl -X GET http://localhost:8000/v1/health/ready
+```
+
+服务就绪后通常会返回：
+
+```json
+{"status":"ready"}
+```
+
+NVIDIA 文档将 `/v1/health/ready` 作为正在运行的 NIM 服务的就绪检查接口。
+
+### Step 5: 测试 TRELLIS NIM API
+
+一个简单的测试请求如下：
+
+```bash
+invoke_url="http://localhost:8000/v1/infer"
+output_glb_path="result.glb"
+
+response=$(curl -X POST $invoke_url \
+  -H "Accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "prompt": "A simple coffee shop interior",
+        "seed": 0
+      }')
+
+response_body=$(echo "$response" | awk '/{/,EOF-1')
+echo $response_body | jq .artifacts[0].base64 | tr -d '"' | base64 --decode > $output_glb_path
+```
+
+NVIDIA 的 TRELLIS NIM 部署页面展示了这一流程：向 `http://localhost:8000/v1/infer` 发送请求，再将 `artifacts[0].base64` 解码为 `.glb` 文件。
+
+### Step 6: Text/Image-to-3D 请求体
+
+NVIDIA 的 Visual GenAI 性能指南展示了 TRELLIS 请求体中常见的字段：
+
+- `mode: "text"`，配合 `prompt` 用于 text-to-3D。
+- `mode: "image"`，配合 base64 图片用于 image-to-3D。
+- 可选采样控制参数，例如 `ss_sampling_steps` 和 `slat_sampling_steps`。
+
+示例 image-to-3D 请求结构如下：
+
+```bash
+input_image_path="input.jpg"
+image_b64=$(base64 -w 0 "$input_image_path")
+
+curl -X POST http://localhost:8000/v1/infer \
+  -H "Accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "mode": "image",
+        "image": "data:image/png;base64,'${image_b64}'",
+        "seed": 0,
+        "ss_sampling_steps": 25,
+        "slat_sampling_steps": 25
+      }'
+```
+
+在这个仓库里，这类 API 调用通常封装在 `pipelines/trellis_client.py` 中，因此正常使用时不需要手动拼接 `curl` 请求。后端地址应保持在 `config.py` 中统一管理。这里主要是说明本仓库的集成方式，请求结构本身遵循 NVIDIA 官方公开的 TRELLIS NIM 示例。
+
+### Step 7: 让前端连接后端
+
+在 NIM 容器启动后，请更新 `config.py` 中的 TRELLIS 后端地址，确保本地 Gradio 应用把生成请求发送到正确的主机和端口。
+
+典型的本地部署配置如下：
+
+```python
+TRELLIS_BASE_URL = "http://localhost:8000" # Change it to your API URL
+```
+
+如果后端运行在另一台 Linux 或 WSL 机器上，请将 `localhost` 替换为该机器可访问的 IP 或主机名。
+
+## ③ 运行前端应用
 
 使用以下命令启动 Gradio 应用：
 
@@ -78,24 +215,24 @@ pip install -r requirements.txt
 python app.py
 ```
 
-默认情况下，应用会运行在 `0.0.0.0:7860`。
+启动后，Gradio 会在终端输出本地访问地址。用浏览器打开即可体验演示。
 
-## Dependencies / Tech Stack
+# Dependencies / Tech Stack
 
 - Gradio：Web 界面。
 - PyTorch 与 torchvision：模型推理执行。
 - Diffusers 与 Transformers：图像编辑流程的核心依赖。
 - InstructPix2Pix：文本引导图像编辑。
-- TRELLIS：后端 3D 生成服务。
+- TRELLIS：后端 3D 生成。
 - NumPy、Pillow、Requests 等工具库：用于图像处理和接口通信。
 
-## Notes
+# Notes
 
 - 本地应用负责图像预处理和 InstructPix2Pix 编辑，3D 生成功能会请求已配置的远程 TRELLIS 服务。
 - TRELLIS 接口地址定义在 `config.py` 中；如果后端地址或端口变化，请同步更新配置。
 - 生成结果会写入 `outputs/` 目录，包括编辑后的图片和导出的 `.glb` 文件。
 - `requirements.txt`、`environment.yml` 和 `pyproject.toml` 已对依赖范围做了约束，以保持与 Python 3.10 环境一致。
 
-## License
+<!-- # License
 
-暂未添加许可证信息。
+暂未添加许可证信息。 -->
