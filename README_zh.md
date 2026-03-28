@@ -33,7 +33,7 @@
 ### conda setup
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/BrightChenXY/text-guided-image-to-3d.git
 cd text-guided-image-to-3d
 conda env create -f environment.yml
 conda activate text-guided-image-to-3d
@@ -44,7 +44,7 @@ conda activate text-guided-image-to-3d
 ### uv setup
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/BrightChenXY/text-guided-image-to-3d.git
 cd text-guided-image-to-3d
 uv venv --python 3.10
 source .venv/bin/activate
@@ -58,7 +58,7 @@ uv sync
 ### pip setup
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/BrightChenXY/text-guided-image-to-3d.git
 cd text-guided-image-to-3d
 python -m venv .venv
 source .venv/bin/activate

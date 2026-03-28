@@ -33,7 +33,7 @@ Gradio demo for text-guided image editing with InstructPix2Pix and remote TRELLI
 ### conda setup
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/BrightChenXY/text-guided-image-to-3d.git
 cd text-guided-image-to-3d
 conda env create -f environment.yml
 conda activate text-guided-image-to-3d
@@ -44,7 +44,7 @@ If the environment name inside `environment.yml` is changed locally, activate th
 ### uv setup
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/BrightChenXY/text-guided-image-to-3d.git
 cd text-guided-image-to-3d
 uv venv --python 3.10
 source .venv/bin/activate
@@ -58,7 +58,7 @@ This repository is configured as a non-packaged app (`tool.uv.package = false`),
 ### pip setup
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/BrightChenXY/text-guided-image-to-3d.git
 cd text-guided-image-to-3d
 python -m venv .venv
 source .venv/bin/activate
