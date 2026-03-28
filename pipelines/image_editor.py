@@ -63,7 +63,7 @@ def load_editor() -> StableDiffusionInstructPix2PixPipeline:
         requires_safety_checker=False,
     )
 
-    pipe.set_progress_bar_config(disable=True)
+    pipe.set_progress_bar_config(disable=False)
 
     device = _get_device()
     pipe = pipe.to(device)
