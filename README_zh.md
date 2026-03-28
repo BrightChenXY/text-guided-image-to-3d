@@ -1,5 +1,7 @@
 # text-guided-image-to-3d
 
+[English](README.md) | [简体中文]
+
 一个基于 Gradio 的演示项目，用于通过 InstructPix2Pix 进行文本引导图像编辑，并调用远程 TRELLIS 后端生成 3D 模型。
 
 ## Features

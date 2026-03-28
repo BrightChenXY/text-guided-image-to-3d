@@ -1,5 +1,7 @@
 # text-guided-image-to-3d
 
+[English] | [简体中文](README_zh.md)
+
 Gradio demo for text-guided image editing with InstructPix2Pix and remote TRELLIS-based 3D generation.
 
 ## Features
