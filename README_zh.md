@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
-一个基于 Gradio 的演示项目，支持通过 InstructPix2Pix 进行文本引导图像编辑，并通过 TRELLIS NVIDIA NIM 远程后端生成 3D 结果。可直接查看 [Quickstart](#quickstart)。
+一个基于 Gradio 的演示项目，支持通过 InstructPix2Pix 进行文本引导图像编辑，并通过 TRELLIS NVIDIA NIM 远程后端生成 3D 结果。在Linux/WSL上部署，可直接查看 [Quickstart](#quickstart)。
 
 ## Features
 
