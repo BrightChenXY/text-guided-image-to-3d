@@ -19,6 +19,7 @@ from config import (
 )
 from pipelines.image_editor import edit_image_with_prompt
 from pipelines.preprocess import preprocess_image
+from pipelines.text_to_image import generate_image_from_text
 from pipelines.trellis_client import request_3d_generation
 
 
@@ -31,6 +32,18 @@ def build_edit_prompt(user_prompt: str) -> str:
         f"{prompt}. "
         "Keep a single centered object, clean background, clear silhouette, "
         "product-style view, suitable for 3D asset generation."
+    )
+
+
+def build_text_to_image_prompt(user_prompt: str) -> str:
+    prompt = (user_prompt or "").strip()
+    if not prompt:
+        raise ValueError("Please enter a text prompt before generating.")
+
+    return (
+        f"{prompt}. "
+        "Single centered object, clean studio background, clear silhouette, "
+        "front three-quarter product render, suitable for 3D asset generation."
     )
 
 
@@ -79,7 +92,7 @@ def _normalize_edited_output(edited_output: Any) -> Image.Image:
     return edited_output.convert("RGB")
 
 
-def _save_edited_image(image: Image.Image) -> str:
+def _save_prepared_image(image: Image.Image) -> str:
     edited_name = f"{uuid.uuid4().hex}.png"
     edited_path = EDITED_DIR / edited_name
     image.save(edited_path)
@@ -87,20 +100,45 @@ def _save_edited_image(image: Image.Image) -> str:
 
 
 def _compute_request_signature(
-    image: Image.Image,
-    final_prompt: str,
-    steps: int,
-    guidance: float,
-    image_guidance: float,
+    mode: str,
+    image: Image.Image | None = None,
+    final_prompt: str = "",
+    steps: int | None = None,
+    guidance: float | None = None,
+    image_guidance: float | None = None,
 ) -> str:
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
-    payload = (
-        buffer.getvalue()
-        + final_prompt.encode("utf-8")
-        + f"|{steps}|{guidance}|{image_guidance}".encode("utf-8")
-    )
-    return hashlib.md5(payload).hexdigest()
+    payload = [mode.encode("utf-8")]
+
+    if image is not None:
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        payload.append(buffer.getvalue())
+
+    if final_prompt:
+        payload.append(final_prompt.encode("utf-8"))
+
+    if steps is not None:
+        payload.append(f"|{steps}".encode("utf-8"))
+    if guidance is not None:
+        payload.append(f"|{guidance}".encode("utf-8"))
+    if image_guidance is not None:
+        payload.append(f"|{image_guidance}".encode("utf-8"))
+
+    return hashlib.md5(b"".join(payload)).hexdigest()
+
+
+def _detect_generation_mode(input_image: Any, prompt: str) -> str:
+    has_image = input_image is not None
+    has_prompt = bool((prompt or "").strip())
+
+    if has_image and has_prompt:
+        return "image+prompt"
+    if has_image:
+        return "image"
+    if has_prompt:
+        return "text"
+
+    raise ValueError("Please upload an image, enter a prompt, or provide both.")
 
 
 def _maybe_reuse_edited_image(
@@ -123,10 +161,16 @@ def _maybe_reuse_edited_image(
     with Image.open(path) as cached_image:
         edited_image = cached_image.convert("RGB")
 
-    return edited_image, str(path), {"signature": request_signature, "edited_path": str(path)}, True
+    reused_state = {
+        "signature": request_signature,
+        "edited_path": str(path),
+        "mode": str(edit_state.get("mode", "")),
+        "source": str(edit_state.get("source", "")),
+    }
+    return edited_image, str(path), reused_state, True
 
 
-def _generate_edited_image(
+def _prepare_image_for_3d(
     input_image: Any,
     prompt: str,
     steps: Any,
@@ -141,15 +185,38 @@ def _generate_edited_image(
         DEFAULT_IMAGE_GUIDANCE_SCALE,
     )
 
-    pil_image = _ensure_pil_image(input_image)
-    final_prompt = build_edit_prompt(prompt)
-    request_signature = _compute_request_signature(
-        pil_image,
-        final_prompt,
-        steps_value,
-        guidance_value,
-        image_guidance_value,
+    mode = _detect_generation_mode(input_image, prompt)
+    pil_image = (
+        _ensure_pil_image(input_image) if mode in {"image+prompt", "image"} else None
     )
+
+    if mode == "image+prompt":
+        final_prompt = build_edit_prompt(prompt)
+        request_signature = _compute_request_signature(
+            mode=mode,
+            image=pil_image,
+            final_prompt=final_prompt,
+            steps=steps_value,
+            guidance=guidance_value,
+            image_guidance=image_guidance_value,
+        )
+        source_label = "Edited uploaded image with prompt."
+    elif mode == "text":
+        final_prompt = build_text_to_image_prompt(prompt)
+        request_signature = _compute_request_signature(
+            mode=mode,
+            final_prompt=final_prompt,
+            steps=steps_value,
+            guidance=guidance_value,
+        )
+        source_label = "Generated image from text prompt."
+    else:
+        final_prompt = ""
+        request_signature = _compute_request_signature(
+            mode=mode,
+            image=pil_image,
+        )
+        source_label = "Used uploaded image directly."
 
     reused_image, reused_path, reused_state, reused = _maybe_reuse_edited_image(
         edit_state,
@@ -158,19 +225,36 @@ def _generate_edited_image(
     if reused and reused_image is not None and reused_path is not None:
         return reused_image, reused_path, reused_state, True
 
-    preprocessed = preprocess_image(pil_image, size=PREPROCESS_SIZE)
-    edited_output = edit_image_with_prompt(
-        preprocessed,
-        final_prompt,
-        num_inference_steps=steps_value,
-        guidance_scale=guidance_value,
-        image_guidance_scale=image_guidance_value,
-    )
-    edited_image = _normalize_edited_output(edited_output)
-    edited_path = _save_edited_image(edited_image)
+    if mode == "image+prompt":
+        preprocessed = preprocess_image(pil_image, size=PREPROCESS_SIZE)
+        prepared_output = edit_image_with_prompt(
+            preprocessed,
+            final_prompt,
+            num_inference_steps=steps_value,
+            guidance_scale=guidance_value,
+            image_guidance_scale=image_guidance_value,
+        )
+        prepared_image = _normalize_edited_output(prepared_output)
+    elif mode == "text":
+        generated_image = generate_image_from_text(
+            final_prompt,
+            num_inference_steps=steps_value,
+            guidance_scale=guidance_value,
+            size=PREPROCESS_SIZE,
+        )
+        prepared_image = preprocess_image(generated_image, size=PREPROCESS_SIZE)
+    else:
+        prepared_image = preprocess_image(pil_image, size=PREPROCESS_SIZE)
 
-    state = {"signature": request_signature, "edited_path": edited_path}
-    return edited_image, edited_path, state, False
+    edited_path = _save_prepared_image(prepared_image)
+
+    state = {
+        "signature": request_signature,
+        "edited_path": edited_path,
+        "mode": mode,
+        "source": source_label,
+    }
+    return prepared_image, edited_path, state, False
 
 
 def run_edit(
@@ -181,17 +265,18 @@ def run_edit(
     image_guidance: Any,
 ):
     try:
-        edited_image, edited_path, state, reused = _generate_edited_image(
+        prepared_image, edited_path, state, reused = _prepare_image_for_3d(
             input_image,
             prompt,
             steps,
             guidance,
             image_guidance,
         )
-        prefix = "Reused existing edited image." if reused else "Edited image generated successfully."
-        return edited_image, state, f"{prefix}\nSaved to: {edited_path}"
+        source = state.get("source", "Prepared image ready.")
+        prefix = "Reused existing prepared image." if reused else source
+        return prepared_image, state, f"{prefix}\nSaved to: {edited_path}"
     except Exception as exc:
-        return None, {}, f"Edit failed: {exc}"
+        return None, {}, f"Preparation failed: {exc}"
 
 
 def run_full_pipeline(
@@ -203,7 +288,7 @@ def run_full_pipeline(
     edit_state: Any,
 ):
     try:
-        edited_image, edited_path, state, reused = _generate_edited_image(
+        prepared_image, edited_path, state, reused = _prepare_image_for_3d(
             input_image,
             prompt,
             steps,
@@ -212,40 +297,43 @@ def run_full_pipeline(
             edit_state=edit_state,
         )
     except Exception as exc:
-        return None, {}, None, None, f"Edit failed: {exc}"
+        return None, {}, None, None, f"Preparation failed: {exc}"
 
     result = request_3d_generation(edited_path)
     if not result["success"]:
         return (
-            edited_image,
+            prepared_image,
             state,
             None,
             None,
-            "3D generation failed: "
-            f"{result['message']}",
+            "3D generation failed: " f"{result['message']}",
         )
 
     glb_path = result["glb_path"]
-    prefix = "Reused existing edited image." if reused else "Edited image generated successfully."
+    prefix = (
+        "Reused existing prepared image."
+        if reused
+        else state.get("source", "Prepared image ready.")
+    )
     status = f"{prefix}\n{result['message']}"
-    return edited_image, state, glb_path, glb_path, status
+    return prepared_image, state, glb_path, glb_path, status
 
 
 with gr.Blocks(title="Multimodal 3D Demo") as demo:
-    gr.Markdown("# Multimodal Image + Text to 3D Demo")
+    gr.Markdown("# Multimodal Prompt/Image to 3D Demo")
     gr.Markdown(
-        "Upload a reference image, preview the edited result, then generate and preview the GLB model."
+        "Supports image + prompt, image only, or prompt only. The app always prepares an image locally before sending it to TRELLIS."
     )
 
     edited_state = gr.State(value={})
 
     with gr.Row():
         input_image = gr.Image(label="Input Image", type="numpy")
-        edited_image = gr.Image(label="Edited Image", type="pil")
+        edited_image = gr.Image(label="Prepared Image", type="pil")
 
     prompt = gr.Textbox(
         label="Prompt",
-        placeholder="Example: turn this object into a blue fantasy collectible",
+        placeholder="Optional. Example: blue fantasy collectible figurine",
     )
 
     with gr.Row():
@@ -266,7 +354,7 @@ with gr.Blocks(title="Multimodal 3D Demo") as demo:
         )
 
     with gr.Row():
-        edit_btn = gr.Button("Preview Edited Image", variant="secondary")
+        edit_btn = gr.Button("Preview Prepared Image", variant="secondary")
         gen_btn = gr.Button("Generate 3D", variant="primary")
 
     with gr.Row():

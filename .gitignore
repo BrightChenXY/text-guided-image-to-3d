@@ -10,6 +10,7 @@ env/
 
 # IDE / editor configs
 config.py
+start.bat
 
 # Environment / local config
 .env
