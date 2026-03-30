@@ -1,5 +1,6 @@
 import hashlib
 import io
+import json
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Tuple
@@ -14,6 +15,7 @@ from config import (
     DEFAULT_GUIDANCE_SCALE,
     DEFAULT_IMAGE_GUIDANCE_SCALE,
     DEFAULT_STEPS,
+    DEMO_TEMPLATE_MANIFEST,
     EDITED_DIR,
     PREPROCESS_SIZE,
 )
@@ -21,6 +23,54 @@ from pipelines.image_editor import edit_image_with_prompt
 from pipelines.preprocess import preprocess_image
 from pipelines.text_to_image import generate_image_from_text
 from pipelines.trellis_client import request_3d_generation
+
+
+INPUT_PANEL_HEIGHT = 320
+PREVIEW_PANEL_HEIGHT = 420
+DOWNLOAD_PANEL_HEIGHT = 72
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+UI_CSS = f"""
+#prompt-box {{
+    height: {INPUT_PANEL_HEIGHT}px;
+}}
+
+#prompt-box textarea {{
+    min-height: calc({INPUT_PANEL_HEIGHT}px - 56px) !important;
+    height: calc({INPUT_PANEL_HEIGHT}px - 56px) !important;
+    resize: none !important;
+}}
+
+#download-glb {{
+    min-height: {DOWNLOAD_PANEL_HEIGHT}px;
+}}
+
+#download-glb .file-wrap,
+#download-glb .file-preview,
+#download-glb .empty,
+#download-glb .wrap {{
+    min-height: {DOWNLOAD_PANEL_HEIGHT}px !important;
+}}
+
+#prepared-image,
+#model-preview,
+#model-preview-file {{
+    min-height: {PREVIEW_PANEL_HEIGHT}px;
+}}
+
+#prepared-image .image-container,
+#prepared-image .image-frame,
+#model-preview model-viewer,
+#model-preview .wrap,
+#model-preview-file .file-wrap,
+#model-preview-file .file-preview,
+#model-preview-file .empty,
+#model-preview-file .wrap {{
+    min-height: {PREVIEW_PANEL_HEIGHT}px !important;
+    height: {PREVIEW_PANEL_HEIGHT}px !important;
+}}
+
+"""
 
 
 def build_edit_prompt(user_prompt: str) -> str:
@@ -257,6 +307,209 @@ def _prepare_image_for_3d(
     return prepared_image, edited_path, state, False
 
 
+def _resolve_template_path(path_value: str | None) -> Path | None:
+    if not path_value:
+        return None
+
+    candidate = Path(path_value)
+    if not candidate.is_absolute():
+        candidate = (PROJECT_ROOT / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+
+    return candidate
+
+
+def _is_usable_file(path_value: Path | None) -> bool:
+    if path_value is None or not path_value.exists() or not path_value.is_file():
+        return False
+    return path_value.stat().st_size > 0
+
+
+def _load_demo_templates() -> dict[str, dict[str, Any]]:
+    manifest_path = DEMO_TEMPLATE_MANIFEST
+    if not manifest_path.exists():
+        return {}
+
+    with manifest_path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+
+    items = payload.get("templates", payload) if isinstance(payload, dict) else payload
+    templates: dict[str, dict[str, Any]] = {}
+
+    if not isinstance(items, list):
+        return templates
+
+    for raw_template in items:
+        if not isinstance(raw_template, dict):
+            continue
+
+        template_id = str(raw_template.get("id", "")).strip()
+        label = str(raw_template.get("label", template_id)).strip()
+        if not template_id or not label:
+            continue
+
+        input_path = _resolve_template_path(raw_template.get("input_image"))
+        edited_path = _resolve_template_path(raw_template.get("edited_image"))
+        glb_path = _resolve_template_path(raw_template.get("glb_path"))
+
+        templates[template_id] = {
+            "id": template_id,
+            "label": label,
+            "prompt": str(raw_template.get("prompt", "")).strip(),
+            "description": str(raw_template.get("description", "")).strip(),
+            "input_image_path": (
+                str(input_path) if _is_usable_file(input_path) else None
+            ),
+            "edited_image_path": (
+                str(edited_path) if _is_usable_file(edited_path) else None
+            ),
+            "glb_path": str(glb_path) if _is_usable_file(glb_path) else None,
+            "steps": _coerce_int(raw_template.get("steps"), DEFAULT_STEPS),
+            "guidance": _coerce_float(
+                raw_template.get("guidance"), DEFAULT_GUIDANCE_SCALE
+            ),
+            "image_guidance": _coerce_float(
+                raw_template.get("image_guidance"),
+                DEFAULT_IMAGE_GUIDANCE_SCALE,
+            ),
+        }
+
+    return templates
+
+
+def _load_pil_from_path(path_value: str | None) -> Image.Image | None:
+    if not path_value:
+        return None
+
+    path = Path(path_value)
+    if not path.exists():
+        return None
+
+    with Image.open(path) as handle:
+        return handle.convert("RGB")
+
+
+def _build_template_state(
+    template: dict[str, Any],
+    input_pil: Image.Image | None,
+) -> dict[str, str]:
+    edited_path = template.get("edited_image_path")
+    if not edited_path:
+        return {}
+
+    prompt = str(template.get("prompt", "")).strip()
+    steps = _coerce_int(template.get("steps"), DEFAULT_STEPS)
+    guidance = _coerce_float(template.get("guidance"), DEFAULT_GUIDANCE_SCALE)
+    image_guidance = _coerce_float(
+        template.get("image_guidance"),
+        DEFAULT_IMAGE_GUIDANCE_SCALE,
+    )
+
+    mode = _detect_generation_mode(input_pil, prompt)
+    if mode == "image+prompt":
+        final_prompt = build_edit_prompt(prompt)
+        signature = _compute_request_signature(
+            mode=mode,
+            image=input_pil,
+            final_prompt=final_prompt,
+            steps=steps,
+            guidance=guidance,
+            image_guidance=image_guidance,
+        )
+    elif mode == "text":
+        final_prompt = build_text_to_image_prompt(prompt)
+        signature = _compute_request_signature(
+            mode=mode,
+            final_prompt=final_prompt,
+            steps=steps,
+            guidance=guidance,
+        )
+    else:
+        signature = _compute_request_signature(mode=mode, image=input_pil)
+
+    return {
+        "signature": signature,
+        "edited_path": str(Path(edited_path).resolve()),
+        "mode": mode,
+        "source": f"Loaded demo template: {template['label']}",
+    }
+
+
+DEMO_TEMPLATE_CLEAR_VALUE = "__clear_template__"
+
+
+def clear_demo_template():
+    return (
+        gr.update(value=None),
+        None,
+        "",
+        DEFAULT_STEPS,
+        DEFAULT_GUIDANCE_SCALE,
+        DEFAULT_IMAGE_GUIDANCE_SCALE,
+        None,
+        {},
+        None,
+        None,
+        "Cleared demo template. You can now upload an image or enter a new prompt.",
+    )
+
+
+def apply_demo_template(template_id: str):
+    if template_id == DEMO_TEMPLATE_CLEAR_VALUE:
+        return clear_demo_template()
+
+    template = DEMO_TEMPLATES.get(template_id)
+    if template is None:
+        return (
+            gr.update(value=None),
+            None,
+            "",
+            DEFAULT_STEPS,
+            DEFAULT_GUIDANCE_SCALE,
+            DEFAULT_IMAGE_GUIDANCE_SCALE,
+            None,
+            {},
+            None,
+            None,
+            "No demo template selected.",
+        )
+
+    input_pil = _load_pil_from_path(template.get("input_image_path"))
+    edited_pil = _load_pil_from_path(template.get("edited_image_path"))
+    glb_path = template.get("glb_path")
+    state = _build_template_state(template, input_pil)
+
+    input_value = np.array(input_pil) if input_pil is not None else None
+    model_value = glb_path if glb_path else None
+    description = template.get("description") or "Loaded precomputed demo assets."
+
+    status_lines = [
+        f"Loaded demo template: {template['label']}",
+        description,
+    ]
+    if template.get("edited_image_path"):
+        status_lines.append("Prepared image loaded from disk and ready for reuse.")
+    if glb_path:
+        status_lines.append(f"Precomputed GLB loaded: {glb_path}")
+    else:
+        status_lines.append("No precomputed GLB configured for this template.")
+
+    return (
+        gr.update(value=template_id),
+        input_value,
+        template.get("prompt", ""),
+        template.get("steps", DEFAULT_STEPS),
+        template.get("guidance", DEFAULT_GUIDANCE_SCALE),
+        template.get("image_guidance", DEFAULT_IMAGE_GUIDANCE_SCALE),
+        edited_pil,
+        state,
+        model_value,
+        model_value,
+        "\n".join(status_lines),
+    )
+
+
 def run_edit(
     input_image: Any,
     prompt: str,
@@ -319,7 +572,12 @@ def run_full_pipeline(
     return prepared_image, state, glb_path, glb_path, status
 
 
-with gr.Blocks(title="Multimodal 3D Demo") as demo:
+DEMO_TEMPLATES = _load_demo_templates()
+DEMO_TEMPLATE_CHOICES = [("--- Clear Template ---", DEMO_TEMPLATE_CLEAR_VALUE)] + [
+    (template["label"], template_id) for template_id, template in DEMO_TEMPLATES.items()
+]
+
+with gr.Blocks(title="Multimodal 3D Demo", css=UI_CSS) as demo:
     gr.Markdown("# Multimodal Prompt/Image to 3D Demo")
     gr.Markdown(
         "Supports image + prompt, image only, or prompt only. The app always prepares an image locally before sending it to TRELLIS."
@@ -327,14 +585,28 @@ with gr.Blocks(title="Multimodal 3D Demo") as demo:
 
     edited_state = gr.State(value={})
 
-    with gr.Row():
-        input_image = gr.Image(label="Input Image", type="numpy")
-        edited_image = gr.Image(label="Prepared Image", type="pil")
-
-    prompt = gr.Textbox(
-        label="Prompt",
-        placeholder="Optional. Example: blue fantasy collectible figurine",
+    demo_template_dropdown = gr.Dropdown(
+        choices=DEMO_TEMPLATE_CHOICES,
+        value=None,
+        label="Demo Template",
+        info="Choose a precomputed example to populate the input fields and load cached outputs.",
     )
+
+    with gr.Row():
+        input_image = gr.Image(
+            label="Input Image",
+            type="numpy",
+            height=INPUT_PANEL_HEIGHT,
+            elem_id="input-image",
+        )
+        prompt = gr.Textbox(
+            label="Prompt",
+            placeholder="Optional. Example: blue fantasy collectible figurine",
+            lines=12,
+            max_lines=12,
+            scale=1,
+            elem_id="prompt-box",
+        )
 
     with gr.Row():
         steps = gr.Slider(10, 100, value=DEFAULT_STEPS, step=1, label="Inference Steps")
@@ -358,13 +630,44 @@ with gr.Blocks(title="Multimodal 3D Demo") as demo:
         gen_btn = gr.Button("Generate 3D", variant="primary")
 
     with gr.Row():
+        edited_image = gr.Image(
+            label="Prepared Image",
+            type="pil",
+            height=PREVIEW_PANEL_HEIGHT,
+            elem_id="prepared-image",
+        )
         if hasattr(gr, "Model3D"):
-            model_preview = gr.Model3D(label="3D Preview")
+            model_preview = gr.Model3D(
+                label="3D Preview",
+                height=PREVIEW_PANEL_HEIGHT,
+                elem_id="model-preview",
+            )
         else:
-            model_preview = gr.File(label="3D Preview (.glb)")
-        output_model = gr.File(label="Download GLB")
+            model_preview = gr.File(
+                label="3D Preview (.glb)",
+                elem_id="model-preview-file",
+            )
 
+    output_model = gr.File(label="Download GLB", elem_id="download-glb")
     status_box = gr.Textbox(label="Status", lines=6, interactive=False)
+
+    demo_template_dropdown.change(
+        fn=apply_demo_template,
+        inputs=[demo_template_dropdown],
+        outputs=[
+            demo_template_dropdown,
+            input_image,
+            prompt,
+            steps,
+            guidance,
+            image_guidance,
+            edited_image,
+            edited_state,
+            model_preview,
+            output_model,
+            status_box,
+        ],
+    )
 
     edit_btn.click(
         fn=run_edit,

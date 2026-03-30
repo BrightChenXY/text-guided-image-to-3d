@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any
 
 import torch
 from PIL import Image
 from diffusers import StableDiffusionInstructPix2PixPipeline
 
-from config import DEFAULT_SEED, INSTRUCT_PIX2PIX_MODEL_ID
+from config import (
+    DEFAULT_SEED,
+    INSTRUCT_PIX2PIX_LORA_PATH,
+    INSTRUCT_PIX2PIX_LORA_SCALE,
+    INSTRUCT_PIX2PIX_MODEL_ID,
+)
 
 
-_PIPELINE: Optional[StableDiffusionInstructPix2PixPipeline] = None
+_PIPELINE_CACHE: dict[str, StableDiffusionInstructPix2PixPipeline] = {}
 
 
 def _get_device() -> str:
@@ -24,6 +30,13 @@ def _build_generator(seed: int) -> torch.Generator:
     if torch.cuda.is_available():
         return torch.Generator(device="cuda").manual_seed(seed)
     return torch.Generator().manual_seed(seed)
+
+
+def _resolve_lora_path(lora_path: str | Path | None) -> Path | None:
+    candidate = lora_path if lora_path is not None else INSTRUCT_PIX2PIX_LORA_PATH
+    if not candidate:
+        return None
+    return Path(candidate).expanduser().resolve()
 
 
 def _extract_single_image(result: Any) -> Image.Image:
@@ -51,10 +64,14 @@ def _extract_single_image(result: Any) -> Image.Image:
     return result.convert("RGB")
 
 
-def load_editor() -> StableDiffusionInstructPix2PixPipeline:
-    global _PIPELINE
-    if _PIPELINE is not None:
-        return _PIPELINE
+def load_editor(
+    lora_path: str | Path | None = None,
+) -> StableDiffusionInstructPix2PixPipeline:
+    resolved_lora_path = _resolve_lora_path(lora_path)
+    cache_key = str(resolved_lora_path) if resolved_lora_path else "__base__"
+
+    if cache_key in _PIPELINE_CACHE:
+        return _PIPELINE_CACHE[cache_key]
 
     pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
         INSTRUCT_PIX2PIX_MODEL_ID,
@@ -79,8 +96,17 @@ def load_editor() -> StableDiffusionInstructPix2PixPipeline:
         except Exception:
             pass
 
-    _PIPELINE = pipe
-    return _PIPELINE
+    if resolved_lora_path is not None:
+        if not resolved_lora_path.exists():
+            raise FileNotFoundError(f"LoRA weights not found: {resolved_lora_path}")
+
+        if hasattr(pipe, "load_lora_weights"):
+            pipe.load_lora_weights(str(resolved_lora_path))
+        else:
+            pipe.unet.load_attn_procs(str(resolved_lora_path))
+
+    _PIPELINE_CACHE[cache_key] = pipe
+    return pipe
 
 
 def edit_image_with_prompt(
@@ -94,10 +120,17 @@ def edit_image_with_prompt(
     guidance_scale: float = 7.5,
     image_guidance_scale: float = 1.5,
     seed: int = DEFAULT_SEED,
+    lora_path: str | Path | None = None,
+    lora_scale: float = INSTRUCT_PIX2PIX_LORA_SCALE,
 ) -> Image.Image:
-    pipe = load_editor()
+    resolved_lora_path = _resolve_lora_path(lora_path)
+    pipe = load_editor(resolved_lora_path)
     source_image = image.convert("RGB")
     generator = _build_generator(seed)
+    pipe_kwargs: dict[str, Any] = {}
+
+    if resolved_lora_path is not None:
+        pipe_kwargs["cross_attention_kwargs"] = {"scale": float(lora_scale)}
 
     with torch.inference_mode():
         result = pipe(
@@ -109,6 +142,7 @@ def edit_image_with_prompt(
             image_guidance_scale=float(image_guidance_scale),
             num_images_per_prompt=1,
             generator=generator,
+            **pipe_kwargs,
         )
 
     edited_image = _extract_single_image(result)

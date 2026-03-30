@@ -1,0 +1,13 @@
+{
+  "metadata": "training/data/metadata.jsonl",
+  "index_json": "training/data/final_indices.json",
+  "index_field": "original_dataset_index",
+  "input_filtered_records": 30000,
+  "train_records": 28500,
+  "val_records": 1500,
+  "val_ratio": 0.05,
+  "seed": 42,
+  "max_records": null,
+  "train_output": "training/data/train_subset.jsonl",
+  "val_output": "training/data/val_subset.jsonl"
+}

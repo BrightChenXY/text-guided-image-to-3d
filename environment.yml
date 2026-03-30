@@ -10,13 +10,20 @@ dependencies:
   - numpy>=1.26,<2.0
   - pip:
       - accelerate>=0.33,<1.0
+      - datasets>=2.20,<4.0
       - diffusers>=0.31,<0.36
       - gradio>=4.44,<5.0
       - huggingface_hub>=0.24,<1.0
       - pillow>=10.4,<11.0
+      - peft>=0.12,<0.15
       - protobuf>=4.25,<6.0
       - requests>=2.31,<3.0
       - safetensors>=0.4.3,<1.0
       - scipy>=1.11,<2.0
       - sentencepiece>=0.2,<1.0
+      - tensorboard>=2.17,<3.0
+      - trimesh>=4.4,<5.0
+      - pyrender>=0.1.45,<0.2
+      - PyOpenGL>=3.1.7,<4.0
+      - pyglet>=1.5,<2.0
       - transformers>=4.44,<4.49

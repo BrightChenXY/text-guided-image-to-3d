@@ -1,0 +1,28 @@
+{
+  "templates": [
+    {
+      "id": "sample_000000",
+      "label": "Sample 000000 | Magnifying Glass",
+      "prompt": "turn the cover into a magnifying glass",
+      "input_image": "training/data/original_images/000000.png",
+      "edited_image": "training/data/edited_images/000000.png",
+      "glb_path": "",
+      "steps": 20,
+      "guidance": 7.5,
+      "image_guidance": 1.5,
+      "description": "Preloaded 2D example. Add a real GLB path to enable 3D preview for this template."
+    },
+    {
+      "id": "bibilabu",
+      "label": "Bibilabu | A Banana Cat",
+      "prompt": "",
+      "input_image": "assets/template/input_imgs/bibilabu.jpg",
+      "edited_image": "assets/template/edited_imgs/bibilabu.jpg",
+      "glb_path": "assets/template/output_glbs/bibilabu.glb",
+      "steps": 20,
+      "guidance": 7.5,
+      "image_guidance": 1.5,
+      "description": "A fun memeexample of a cat with a banana on its head, created by the community member Bibilabu. The prompt used for this edit was: 'turn the cover into a cat with a banana on its head'."
+    }
+  ]
+}

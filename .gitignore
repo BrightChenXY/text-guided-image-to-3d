@@ -9,7 +9,7 @@ venv/
 env/
 
 # IDE / editor configs
-config.py
+# config.py
 start.bat
 
 # Environment / local config
@@ -21,6 +21,12 @@ start.bat
 build/
 dist/
 *.egg-info/
+
+# img / png
+*.png
+*.jpg
+*.jpeg
+
 
 # Jupyter
 .ipynb_checkpoints/

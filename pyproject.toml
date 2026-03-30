@@ -5,18 +5,25 @@ description = "Gradio demo for image editing with InstructPix2Pix and remote TRE
 requires-python = ">=3.10,<3.11"
 dependencies = [
     "accelerate>=0.33,<1.0",
+    "datasets>=2.20,<4.0",
     "diffusers>=0.31,<0.36",
     "gradio>=4.44,<5.0",
     "huggingface_hub>=0.24,<1.0",
     "numpy>=1.26,<2.0",
     "pillow>=10.4,<11.0",
+    "peft>=0.12,<0.15",
     "protobuf>=4.25,<6.0",
     "requests>=2.31,<3.0",
     "safetensors>=0.4.3,<1.0",
     "scipy>=1.11,<2.0",
     "sentencepiece>=0.2,<1.0",
-    "torch>=2.2,<2.6",
-    "torchvision>=0.17,<0.21",
+    "tensorboard>=2.17,<3.0",
+    "torch==2.5.1",
+    "torchvision==0.20.1",
+    "trimesh>=4.4,<5.0",
+    "pyrender>=0.1.45,<0.2",
+    "PyOpenGL>=3.1.7,<4.0",
+    "pyglet>=1.5,<2.0",
     "transformers>=4.44,<4.49",
 ]
 
@@ -26,3 +33,12 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 package = false
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }
+torchvision = { index = "pytorch-cu121" }
