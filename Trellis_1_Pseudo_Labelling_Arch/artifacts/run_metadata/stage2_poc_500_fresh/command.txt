@@ -1,0 +1,1 @@
+python train.py --config /workspace/arch1_runs/stage2_poc_500/config.json --output_dir /workspace/arch1_runs/stage2_poc_500_fresh --data_dir /workspace/arch1_preprocessed --num_gpus 1 --ckpt none --auto_retry 0

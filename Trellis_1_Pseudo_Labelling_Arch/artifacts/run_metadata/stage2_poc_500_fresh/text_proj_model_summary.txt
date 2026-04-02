@@ -1,0 +1,9 @@
+Parameters:
+================================================================================================================================
+Name                                                                    Shape                           Type            Grad
+proj.weight                                                             torch.Size([1024, 768])         torch.float32   True
+proj.bias                                                               torch.Size([1024])              torch.float32   True
+
+Number of parameters: 787456
+Number of trainable parameters: 787456
+

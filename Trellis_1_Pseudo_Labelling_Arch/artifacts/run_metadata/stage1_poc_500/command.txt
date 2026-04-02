@@ -1,0 +1,1 @@
+python train.py --config /workspace/TRELLIS/configs/arch1_stage1_poc.json --output_dir /workspace/arch1_runs/stage1_poc_500 --data_dir /workspace/arch1_preprocessed --num_gpus 1 --auto_retry 0
