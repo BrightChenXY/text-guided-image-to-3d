@@ -1,0 +1,43 @@
+{
+  "total_samples": 313010,
+  "kept_samples": 235496,
+  "rejected_samples": 77514,
+  "kept_percentage": 75.2,
+  "keep_reasons": {
+    "object_keyword": 124093,
+    "ambiguous": 103264,
+    "object_pattern": 8139
+  },
+  "reject_reasons": {
+    "scene_pattern": 22482,
+    "scene_kw:desert": 4050,
+    "scene_kw:snow": 3113,
+    "scene_kw:sky": 3079,
+    "scene_kw:forest": 2567,
+    "scene_kw:sunset": 2526,
+    "scene_kw:beach": 2495,
+    "scene_kw:landscape": 2287,
+    "scene_kw:river": 2287,
+    "scene_kw:stormy": 2258,
+    "scene_kw:lake": 2254,
+    "scene_kw:night": 1989,
+    "scene_kw:mountain": 1779,
+    "scene_kw:black and white": 1718,
+    "too_short": 1479,
+    "scene_kw:storm": 1462,
+    "scene_kw:winter": 1270,
+    "scene_kw:summer": 1197,
+    "scene_kw:volcano": 1177,
+    "scene_kw:waterfall": 1172,
+    "scene_kw:background": 1118,
+    "scene_kw:tornado": 940,
+    "scene_kw:canyon": 713,
+    "scene_kw:ocean": 686,
+    "scene_kw:field": 681,
+    "scene_kw:nighttime": 680,
+    "scene_kw:sunny": 629,
+    "scene_kw:rain": 609,
+    "scene_kw:snowing": 594,
+    "scene_kw:lightning": 561
+  }
+}
