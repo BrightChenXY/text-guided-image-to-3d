@@ -14,12 +14,58 @@
 
 ## Project Structure
 
-- `app.py`: Gradio 界面与端到端流程编排。
-- `config.py`: 运行配置、输出目录、模型 ID 与 TRELLIS 接口地址。
-- `pipelines/`: 图像预处理、InstructPix2Pix 编辑与 TRELLIS 客户端逻辑。
-- `assets/`: 静态资源目录。
-- `outputs/`: 保存编辑后的图片、预览文件和生成的网格模型。
-- `requirements.txt`、`environment.yml`、`pyproject.toml`: 依赖与环境定义文件。
+```text
+text-guided-image-to-3d/
+├── app.py
+├── config.py
+├── pipelines/
+│   ├── image_editor.py
+│   ├── mock_backend.py
+│   ├── preprocess.py
+│   ├── text_to_image.py
+│   └── trellis_client.py
+├── training/
+│   ├── data/
+│   ├── outputs/
+│   ├── dataset.py
+│   ├── eval_trellis_compare.py
+│   ├── infer_lora_pix2pix.py
+│   ├── prepare_metadata.py
+│   ├── split_filtered_metadata.py
+│   ├── train_lora_pix2pix.py
+│   ├── trellis_eval.py
+│   ├── README_training.md
+│   └── README_training_zh.md
+├── assets/
+│   ├── demo_templates.json
+│   ├── placeholder.glb
+│   └── template/
+│       ├── edited_imgs/
+│       ├── input_imgs/
+│       └── output_glbs/
+├── outputs/
+│   ├── edited/
+│   ├── meshes/
+│   └── previews/
+├── requirements.txt
+├── environment.yml
+├── pyproject.toml
+├── README.md
+└── README_zh.md
+```
+
+关键文件说明：
+
+- `app.py`：主 Gradio 入口，负责串联图像预处理、前端编辑、TRELLIS 请求、演示模板和结果展示。
+- `config.py`：集中管理运行配置，包括模型 ID、TRELLIS 接口地址、默认生成参数、输出目录以及可选的 LoRA 设置。
+- `pipelines/image_editor.py`：加载 InstructPix2Pix 编辑器并执行文本引导的图像编辑，推理时也支持可选的 LoRA 增强。
+- `pipelines/trellis_client.py`：封装远程 TRELLIS API 调用，并把返回的 `.glb` 资产保存到本地输出目录。
+- `training/train_lora_pix2pix.py`：LoRA 训练主脚本，支持本地 JSONL 数据集、Hugging Face 在线数据集、TensorBoard 日志、checkpoint 保存和 TRELLIS rerank 验证。
+- `training/dataset.py`：训练阶段共用的数据集与预处理工具，覆盖本地 metadata、Hugging Face 数据集、过滤逻辑和流式子集训练。
+- `training/trellis_eval.py`：黑盒 TRELLIS proxy scoring 工具，用于通过下游 3D 友好指标评估编辑后的图像。
+- `training/eval_trellis_compare.py`：离线对比脚本，用 TRELLIS proxy metrics 比较 baseline 和 LoRA 增强模型，并输出对比图表。
+- `assets/demo_templates.json`：预置演示模板清单，记录缓存的输入图、编辑结果预览和可选 GLB 输出。
+- `outputs/`：默认本地输出根目录，用于保存编辑图、预览图、生成网格以及中间结果。
 
 ## Requirements
 

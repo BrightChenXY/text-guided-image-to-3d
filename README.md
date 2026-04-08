@@ -14,12 +14,58 @@ Gradio demo for text-guided image editing with InstructPix2Pix front-end across 
 
 ## Project Structure
 
-- `app.py`: Gradio interface and end-to-end workflow orchestration.
-- `config.py`: Runtime settings, output directories, model IDs, and TRELLIS endpoint configuration.
-- `pipelines/`: Image preprocessing, InstructPix2Pix editing, and TRELLIS client logic.
-- `assets/`: Static project assets.
-- `outputs/`: Saved edited images, previews, and generated meshes.
-- `requirements.txt`, `environment.yml`, `pyproject.toml`: Dependency and environment definitions.
+```text
+text-guided-image-to-3d/
+├── app.py
+├── config.py
+├── pipelines/
+│   ├── image_editor.py
+│   ├── mock_backend.py
+│   ├── preprocess.py
+│   ├── text_to_image.py
+│   └── trellis_client.py
+├── training/
+│   ├── data/
+│   ├── outputs/
+│   ├── dataset.py
+│   ├── eval_trellis_compare.py
+│   ├── infer_lora_pix2pix.py
+│   ├── prepare_metadata.py
+│   ├── split_filtered_metadata.py
+│   ├── train_lora_pix2pix.py
+│   ├── trellis_eval.py
+│   ├── README_training.md
+│   └── README_training_zh.md
+├── assets/
+│   ├── demo_templates.json
+│   ├── placeholder.glb
+│   └── template/
+│       ├── edited_imgs/
+│       ├── input_imgs/
+│       └── output_glbs/
+├── outputs/
+│   ├── edited/
+│   ├── meshes/
+│   └── previews/
+├── requirements.txt
+├── environment.yml
+├── pyproject.toml
+├── README.md
+└── README_zh.md
+```
+
+Key files:
+
+- `app.py`: Main Gradio entry point. Wires together image preprocessing, front-end editing, TRELLIS requests, demo templates, and output rendering.
+- `config.py`: Central runtime configuration for model IDs, TRELLIS endpoint settings, default generation parameters, output directories, and optional LoRA settings.
+- `pipelines/image_editor.py`: Loads the InstructPix2Pix editor and applies prompt-guided image editing, with optional LoRA enhancement at inference time.
+- `pipelines/trellis_client.py`: Wraps the remote TRELLIS API call and saves returned `.glb` assets into the local output directory.
+- `training/train_lora_pix2pix.py`: Main LoRA training script. Supports local JSONL datasets, Hugging Face online datasets, TensorBoard logging, checkpointing, and TRELLIS rerank validation.
+- `training/dataset.py`: Shared dataset and preprocessing utilities for local metadata files, Hugging Face datasets, filtering, and streaming subset training.
+- `training/trellis_eval.py`: Black-box TRELLIS proxy scoring utilities used to evaluate edited images through downstream 3D-friendly metrics.
+- `training/eval_trellis_compare.py`: Offline comparison tool for baseline versus LoRA-enhanced models using TRELLIS proxy metrics and saved comparison charts.
+- `assets/demo_templates.json`: Manifest for preloaded demo examples, including cached input images, edited previews, and optional GLB outputs.
+- `outputs/`: Default local output root for edited images, previews, generated meshes, and intermediate artefacts.
 
 ## Requirements
 
