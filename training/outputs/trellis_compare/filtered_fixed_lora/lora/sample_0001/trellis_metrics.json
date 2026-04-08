@@ -1,0 +1,11 @@
+{
+  "success": false,
+  "score": 0.0,
+  "message": "TRELLIS succeeded, but GLB rendering/scoring failed: index 0 is out of bounds for axis 0 with size 0",
+  "glb_path": "E:\\Workspaces\\Python\\text-guided-image-to-3d\\training\\outputs\\trellis_compare\\filtered_fixed_lora\\lora\\sample_0001\\trellis_result.glb",
+  "metrics": {
+    "trellis_success": 1.0,
+    "render_success": 0.0
+  },
+  "render_paths": {}
+}

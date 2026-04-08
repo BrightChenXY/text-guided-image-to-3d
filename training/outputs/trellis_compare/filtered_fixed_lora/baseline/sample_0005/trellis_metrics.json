@@ -1,0 +1,81 @@
+{
+  "success": true,
+  "score": 0.6246241312202893,
+  "message": "3D generation successful. GLB saved to: E:\\Workspaces\\Python\\text-guided-image-to-3d\\outputs\\meshes\\result.glb",
+  "glb_path": "E:\\Workspaces\\Python\\text-guided-image-to-3d\\training\\outputs\\trellis_compare\\filtered_fixed_lora\\baseline\\sample_0005\\trellis_result.glb",
+  "metrics": {
+    "trellis_success": 1.0,
+    "front_similarity": 0.4750445485115051,
+    "mean_coverage_score": 0.11349923270089286,
+    "mean_centering_score": 0.9877989417943466,
+    "mean_connectivity_score": 0.7337157464847723,
+    "mean_border_margin_score": 1.0,
+    "view_consistency_score": 0.7986149227899959,
+    "coverage_ratios": {
+      "front": 0.02764892578125,
+      "left": 0.011474609375,
+      "right": 0.0134429931640625,
+      "back": 0.026885986328125,
+      "top": 0.119171142578125
+    },
+    "coverage_scores": {
+      "front": 0.0789969308035714,
+      "left": 0.0327845982142857,
+      "right": 0.0384085518973214,
+      "back": 0.0768171037946429,
+      "top": 0.3404889787946429
+    },
+    "centering_scores": {
+      "front": 1.0,
+      "left": 1.0,
+      "right": 1.0,
+      "back": 0.9944540644519757,
+      "top": 0.9445406445197573
+    },
+    "connectivity_scores": {
+      "front": 0.7325647943749489,
+      "left": 0.4780747275557862,
+      "right": 0.7356959683860932,
+      "back": 0.7222432421070332,
+      "top": 1.0
+    },
+    "largest_component_ratios": {
+      "front": 0.9889624724061811,
+      "left": 0.9800531914893617,
+      "right": 0.9931895573212258,
+      "back": 0.9750283768444948,
+      "top": 1.0
+    },
+    "component_counts": {
+      "front": 2,
+      "left": 4,
+      "right": 2,
+      "back": 2,
+      "top": 1
+    },
+    "border_margin_scores": {
+      "front": 1.0,
+      "left": 1.0,
+      "right": 1.0,
+      "back": 1.0,
+      "top": 1.0
+    },
+    "weights": {
+      "front_similarity": 0.35,
+      "coverage": 0.15,
+      "centering": 0.15,
+      "view_consistency": 0.15,
+      "connectivity": 0.1,
+      "border_margin": 0.1
+    },
+    "overall_score": 0.6246241312202893
+  },
+  "render_paths": {
+    "front": "E:\\Workspaces\\Python\\text-guided-image-to-3d\\training\\outputs\\trellis_compare\\filtered_fixed_lora\\baseline\\sample_0005\\render_front.png",
+    "left": "E:\\Workspaces\\Python\\text-guided-image-to-3d\\training\\outputs\\trellis_compare\\filtered_fixed_lora\\baseline\\sample_0005\\render_left.png",
+    "right": "E:\\Workspaces\\Python\\text-guided-image-to-3d\\training\\outputs\\trellis_compare\\filtered_fixed_lora\\baseline\\sample_0005\\render_right.png",
+    "back": "E:\\Workspaces\\Python\\text-guided-image-to-3d\\training\\outputs\\trellis_compare\\filtered_fixed_lora\\baseline\\sample_0005\\render_back.png",
+    "top": "E:\\Workspaces\\Python\\text-guided-image-to-3d\\training\\outputs\\trellis_compare\\filtered_fixed_lora\\baseline\\sample_0005\\render_top.png",
+    "grid": "E:\\Workspaces\\Python\\text-guided-image-to-3d\\training\\outputs\\trellis_compare\\filtered_fixed_lora\\baseline\\sample_0005\\render_grid.png"
+  }
+}

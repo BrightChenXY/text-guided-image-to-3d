@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from PIL import Image
+from scipy import ndimage
 
 from pipelines.trellis_client import request_3d_generation
 from training.dataset import prepare_square_image
@@ -19,6 +21,38 @@ except ImportError:
     trimesh = None
 
 DEFAULT_VIEW_ORDER = ("front", "left", "right", "back", "top")
+
+
+@dataclass(frozen=True)
+class TrellisProxyWeights:
+    front_similarity: float = 0.35
+    coverage: float = 0.15
+    centering: float = 0.15
+    view_consistency: float = 0.15
+    connectivity: float = 0.10
+    border_margin: float = 0.10
+
+    def normalized(self) -> TrellisProxyWeights:
+        values = {
+            "front_similarity": max(0.0, float(self.front_similarity)),
+            "coverage": max(0.0, float(self.coverage)),
+            "centering": max(0.0, float(self.centering)),
+            "view_consistency": max(0.0, float(self.view_consistency)),
+            "connectivity": max(0.0, float(self.connectivity)),
+            "border_margin": max(0.0, float(self.border_margin)),
+        }
+        total = sum(values.values())
+        if total <= 0:
+            raise ValueError("At least one TRELLIS proxy weight must be > 0.")
+        return TrellisProxyWeights(
+            **{key: value / total for key, value in values.items()}
+        )
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            key: float(value)
+            for key, value in asdict(self.normalized()).items()
+        }
 
 
 def trellis_rerank_dependencies_available() -> bool:
@@ -131,6 +165,25 @@ def render_glb_views(
     return rendered_views
 
 
+def build_render_grid(
+    rendered_views: dict[str, Image.Image],
+    view_order: tuple[str, ...] = DEFAULT_VIEW_ORDER,
+) -> Image.Image:
+    first_view = rendered_views[view_order[0]]
+    width, height = first_view.size
+    columns = 3
+    rows = (len(view_order) + columns - 1) // columns
+    canvas = Image.new("RGB", (columns * width, rows * height), color=(255, 255, 255))
+
+    for index, view_name in enumerate(view_order):
+        image = rendered_views[view_name].resize((width, height))
+        offset_x = (index % columns) * width
+        offset_y = (index // columns) * height
+        canvas.paste(image, (offset_x, offset_y))
+
+    return canvas
+
+
 def _foreground_mask(image: Image.Image) -> np.ndarray:
     array = np.asarray(image.convert("RGB"), dtype=np.uint8)
     return np.any(array < 245, axis=-1)
@@ -157,6 +210,52 @@ def _score_centering(mask: np.ndarray) -> float:
     return float(1.0 - normalized)
 
 
+def _largest_component_ratio(mask: np.ndarray) -> tuple[float, int]:
+    if not np.any(mask):
+        return 0.0, 0
+
+    labeled, component_count = ndimage.label(mask.astype(np.uint8))
+    if component_count <= 0:
+        return 0.0, 0
+
+    component_sizes = np.bincount(labeled.ravel())[1:]
+    if len(component_sizes) == 0:
+        return 0.0, 0
+
+    foreground_area = max(float(mask.sum()), 1.0)
+    largest_ratio = float(component_sizes.max() / foreground_area)
+    return largest_ratio, int(component_count)
+
+
+def _score_connectivity(mask: np.ndarray) -> tuple[float, float, int]:
+    largest_ratio, component_count = _largest_component_ratio(mask)
+    if component_count <= 0:
+        return 0.0, 0.0, 0
+
+    if component_count == 1:
+        return largest_ratio, largest_ratio, component_count
+
+    fragment_penalty = 1.0 / (1.0 + 0.35 * float(component_count - 1))
+    score = float(max(0.0, min(largest_ratio * fragment_penalty, 1.0)))
+    return score, largest_ratio, component_count
+
+
+def _score_border_margin(mask: np.ndarray) -> float:
+    ys, xs = np.where(mask)
+    if len(xs) == 0 or len(ys) == 0:
+        return 0.0
+
+    width = max(mask.shape[1] - 1, 1)
+    height = max(mask.shape[0] - 1, 1)
+    left_margin = float(xs.min() / width)
+    right_margin = float((width - xs.max()) / width)
+    top_margin = float(ys.min() / height)
+    bottom_margin = float((height - ys.max()) / height)
+    smallest_margin = min(left_margin, right_margin, top_margin, bottom_margin)
+    target_margin = 0.08
+    return float(max(0.0, min(smallest_margin / target_margin, 1.0)))
+
+
 def _image_similarity(rendered_image: Image.Image, reference_image: Image.Image) -> float:
     resolution = rendered_image.size[0]
     reference = prepare_square_image(reference_image.convert("RGB"), resolution=resolution)
@@ -169,37 +268,59 @@ def _image_similarity(rendered_image: Image.Image, reference_image: Image.Image)
 def score_rendered_views(
     edited_image: Image.Image,
     rendered_views: dict[str, Image.Image],
+    weights: TrellisProxyWeights | None = None,
 ) -> dict[str, Any]:
+    normalized_weights = (weights or TrellisProxyWeights()).normalized()
     coverage_scores: dict[str, float] = {}
     centering_scores: dict[str, float] = {}
     coverage_ratios: dict[str, float] = {}
+    connectivity_scores: dict[str, float] = {}
+    largest_component_ratios: dict[str, float] = {}
+    component_counts: dict[str, int] = {}
+    border_margin_scores: dict[str, float] = {}
 
     for view_name, rendered_image in rendered_views.items():
         mask = _foreground_mask(rendered_image)
         coverage_ratios[view_name] = float(mask.mean())
         coverage_scores[view_name] = _score_coverage(mask)
         centering_scores[view_name] = _score_centering(mask)
+        connectivity_score, largest_component_ratio, component_count = _score_connectivity(mask)
+        connectivity_scores[view_name] = connectivity_score
+        largest_component_ratios[view_name] = largest_component_ratio
+        component_counts[view_name] = component_count
+        border_margin_scores[view_name] = _score_border_margin(mask)
 
     front_similarity = _image_similarity(rendered_views["front"], edited_image)
     consistency = 1.0 - min(float(np.std(list(coverage_ratios.values()))) / 0.2, 1.0)
     mean_coverage = float(np.mean(list(coverage_scores.values())))
     mean_centering = float(np.mean(list(centering_scores.values())))
+    mean_connectivity = float(np.mean(list(connectivity_scores.values())))
+    mean_border_margin = float(np.mean(list(border_margin_scores.values())))
 
     overall_score = (
-        0.40 * front_similarity
-        + 0.25 * mean_coverage
-        + 0.20 * mean_centering
-        + 0.15 * consistency
+        normalized_weights.front_similarity * front_similarity
+        + normalized_weights.coverage * mean_coverage
+        + normalized_weights.centering * mean_centering
+        + normalized_weights.view_consistency * float(max(0.0, consistency))
+        + normalized_weights.connectivity * mean_connectivity
+        + normalized_weights.border_margin * mean_border_margin
     )
 
     return {
         "front_similarity": float(front_similarity),
         "mean_coverage_score": mean_coverage,
         "mean_centering_score": mean_centering,
+        "mean_connectivity_score": mean_connectivity,
+        "mean_border_margin_score": mean_border_margin,
         "view_consistency_score": float(max(0.0, consistency)),
         "coverage_ratios": coverage_ratios,
         "coverage_scores": coverage_scores,
         "centering_scores": centering_scores,
+        "connectivity_scores": connectivity_scores,
+        "largest_component_ratios": largest_component_ratios,
+        "component_counts": component_counts,
+        "border_margin_scores": border_margin_scores,
+        "weights": normalized_weights.to_dict(),
         "overall_score": float(max(0.0, min(overall_score, 1.0))),
     }
 
@@ -209,6 +330,7 @@ def evaluate_edited_image_with_trellis(
     work_dir: str | Path,
     seed: int = 0,
     render_size: int = 256,
+    score_weights: TrellisProxyWeights | None = None,
 ) -> dict[str, Any]:
     output_dir = Path(work_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -251,7 +373,16 @@ def evaluate_edited_image_with_trellis(
             rendered_image.save(render_path)
             render_paths[view_name] = str(render_path)
 
-        metrics = score_rendered_views(edited_image, rendered_views)
+        render_grid = build_render_grid(rendered_views)
+        render_grid_path = output_dir / "render_grid.png"
+        render_grid.save(render_grid_path)
+        render_paths["grid"] = str(render_grid_path)
+
+        metrics = score_rendered_views(
+            edited_image,
+            rendered_views,
+            weights=score_weights,
+        )
         result["metrics"].update(metrics)
         result["score"] = float(metrics["overall_score"])
         result["render_paths"] = render_paths

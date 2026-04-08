@@ -1,16 +1,28 @@
 {
   "templates": [
     {
-      "id": "sample_000000",
-      "label": "Sample 000000 | Magnifying Glass",
-      "prompt": "turn the cover into a magnifying glass",
-      "input_image": "training/data/original_images/000000.png",
-      "edited_image": "training/data/edited_images/000000.png",
-      "glb_path": "",
+      "id": "vase",
+      "label": "Vase | Magnifying color",
+      "prompt": "change the petals to blue",
+      "input_image": "assets/template/input_imgs/vase.jpg",
+      "edited_image": "assets/template/edited_imgs/vase.jpg",
+      "glb_path": "assets/template/output_glbs/vase.glb",
       "steps": 20,
-      "guidance": 7.5,
-      "image_guidance": 1.5,
-      "description": "Preloaded 2D example. Add a real GLB path to enable 3D preview for this template."
+      "guidance": 10,
+      "image_guidance": 2.2,
+      "description": "A beautiful example of a flower vase with vibrant colors, created by the community member Mads. The prompt used for this edit was: 'change the petals to blue'."
+    },
+    {
+      "id": "lamp",
+      "label": "Lamp | Text-only generation",
+      "prompt": "A desk lamp",
+      "input_image": "assets/template/input_imgs/lamp.jpg",
+      "edited_image": "assets/template/edited_imgs/lamp.jpg",
+      "glb_path": "assets/template/output_glbs/lamp.glb",
+      "steps": 20,
+      "guidance": 10,
+      "image_guidance": 2.2,
+      "description": "A sleek and modern desk lamp,. The prompt used for this edit was: 'A desk lamp'. This example demonstrates the ability to generate a 3D model solely based on a text prompt, without relying on an input image."
     },
     {
       "id": "bibilabu",
@@ -22,7 +34,7 @@
       "steps": 20,
       "guidance": 7.5,
       "image_guidance": 1.5,
-      "description": "A fun memeexample of a cat with a banana on its head, created by the community member Bibilabu. The prompt used for this edit was: 'turn the cover into a cat with a banana on its head'."
+      "description": "A fun meme example of a cat with a banana on its head, created by the community member Bibilabu. The prompt used for this edit was: 'turn the cover into a cat with a banana on its head'."
     }
   ]
 }

@@ -1,6 +1,6 @@
-ï»¿# InstructPix2Pix LoRA Training Guide
+# InstructPix2Pix LoRA Training Guide
 
-[English](README_training.md) | [ç®€ä½“ä¸­æ–‡](README_training_zh.md)
+[English](README_training.md) | [¼òÌåÖÐÎÄ](README_training_zh.md)
 
 This directory provides a minimal but runnable LoRA fine-tuning and inference pipeline for `timbrooks/instruct-pix2pix`, designed to improve the front-end image editing stage before sending images to TRELLIS `large:image`.
 
@@ -464,6 +464,7 @@ trellis_eval/
       render_right.png
       render_back.png
       render_top.png
+      render_grid.png
       trellis_preview.png
       trellis_metrics.json
     summary.json
@@ -488,10 +489,20 @@ trellis/front_similarity
 trellis/coverage_score
 trellis/centering_score
 trellis/view_consistency_score
+trellis/connectivity_score
+trellis/border_margin_score
 trellis/previews/sample_00 ...
 ```
 
 These are proxy metrics, not differentiable training losses. They are meant for model selection and checkpoint reranking.
+
+The default rerank score is now a weighted combination of:
+- front similarity between the edited image and the front render from TRELLIS
+- object coverage that prefers a single reasonably sized asset
+- object centering in rendered views
+- view consistency across front/left/right/back/top renders
+- connectivity that rewards one dominant connected component instead of fragments
+- border margin that penalizes models cropped too tightly against the frame
 
 ### 9.3 Recommended Command
 
@@ -532,9 +543,14 @@ pyglet<2
 Once training finishes, you can point the frontend directly at the best downstream checkpoint:
 
 ```bash
-set INSTRUCT_PIX2PIX_LORA_PATH=training\outputs\checkpoints\hf_pix2pix_lora\best_checkpoint\lora
+set INSTRUCT_PIX2PIX_LORA_PATH=training\outputs\checkpoints\hf_pix2pix_lora
 set INSTRUCT_PIX2PIX_LORA_SCALE=1.0
 python app.py
 ```
 
+The frontend loader now resolves LoRA paths a little more flexibly, so `INSTRUCT_PIX2PIX_LORA_PATH` can point to the run root, `best_checkpoint`, or the final `lora` directory.
+
 If you want the final checkpoint instead, keep using `training/outputs/checkpoints/<run_name>/lora`.
+
+
+

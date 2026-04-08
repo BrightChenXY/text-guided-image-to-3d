@@ -1,7 +1,9 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
 accelerate>=0.33,<1.0
 datasets>=2.20,<4.0
 diffusers>=0.31,<0.36
 gradio>=4.44,<5.0
+matplotlib>=3.8,<4.0
 huggingface_hub>=0.24,<1.0
 numpy>=1.26,<2.0
 pillow>=10.4,<11.0
@@ -11,9 +13,10 @@ requests>=2.31,<3.0
 safetensors>=0.4.3,<1.0
 scipy>=1.11,<2.0
 sentencepiece>=0.2,<1.0
-torch>=2.2,<2.6
-torchvision>=0.17,<0.21
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
 tensorboard>=2.17,<3.0
+tqdm>=4.66,<5.0
 trimesh>=4.4,<5.0
 pyrender>=0.1.45,<0.2
 PyOpenGL>=3.1.7,<4.0

@@ -5,7 +5,7 @@ import json
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 import torch
@@ -63,7 +63,7 @@ def resolve_image_path(metadata_path: str | Path, image_path: str) -> Path:
     return (metadata_file.parent / candidate).resolve()
 
 
-def load_index_filter_set(index_json_path: str | Path) -> set[int | str]:
+def load_index_filter_values(index_json_path: str | Path) -> list[int | str]:
     index_file = Path(index_json_path).expanduser().resolve()
     if not index_file.exists():
         raise FileNotFoundError(f"Index filter file not found: {index_file}")
@@ -74,7 +74,21 @@ def load_index_filter_set(index_json_path: str | Path) -> set[int | str]:
     if not isinstance(payload, list):
         raise ValueError(f"Index filter file must contain a JSON list: {index_file}")
 
-    return {item for item in payload}
+    validated: list[int | str] = []
+    for item in payload:
+        if isinstance(item, (int, str)):
+            validated.append(item)
+            continue
+        raise TypeError(
+            "Index filter items must be integers or strings. "
+            f"Received {type(item).__name__} in {index_file}."
+        )
+
+    return validated
+
+
+def load_index_filter_set(index_json_path: str | Path) -> set[int | str]:
+    return set(load_index_filter_values(index_json_path))
 
 
 def _get_payload_index_value(
@@ -129,7 +143,10 @@ def _iter_metadata_records(
                 metadata_file=metadata_file,
                 line_number=line_number,
             )
-            if selection.selected_indices is not None and index_value not in selection.selected_indices:
+            if (
+                selection.selected_indices is not None
+                and index_value not in selection.selected_indices
+            ):
                 continue
 
             original_image = resolve_image_path(metadata_file, str(original_value))
@@ -144,7 +161,9 @@ def _iter_metadata_records(
                     original_image=original_image,
                     edited_image=edited_image,
                     edit_prompt=str(prompt_value).strip(),
-                    metadata_id=int(payload["id"]) if isinstance(payload.get("id"), int) else None,
+                    metadata_id=(
+                        int(payload["id"]) if isinstance(payload.get("id"), int) else None
+                    ),
                     original_dataset_index=(
                         int(payload["original_dataset_index"])
                         if isinstance(payload.get("original_dataset_index"), int)
@@ -410,6 +429,134 @@ class Pix2PixJsonlDataset(BasePix2PixDataset):
         }
 
 
+class Pix2PixRowsDataset(BasePix2PixDataset):
+    def __init__(
+        self,
+        rows: list[dict[str, Any]],
+        tokenizer: PreTrainedTokenizerBase | None = None,
+        resolution: int = 512,
+        prompt_suffix: str = DEFAULT_PROMPT_SUFFIX,
+        resize_mode: str = "pad",
+        background_color: tuple[int, int, int] = (255, 255, 255),
+    ) -> None:
+        super().__init__(
+            tokenizer=tokenizer,
+            resolution=resolution,
+            prompt_suffix=prompt_suffix,
+            resize_mode=resize_mode,
+            background_color=background_color,
+        )
+        self.rows = list(rows)
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def _get_raw_example(self, index: int) -> dict[str, Any]:
+        return self.rows[index]
+
+
+class LazyPix2PixHFDataset(BasePix2PixDataset):
+    def __init__(
+        self,
+        dataset_name: str,
+        dataset_config_name: str | None,
+        split: str,
+        original_image_column: str,
+        edited_image_column: str,
+        edit_prompt_column: str,
+        tokenizer: PreTrainedTokenizerBase | None = None,
+        resolution: int = 512,
+        prompt_suffix: str = DEFAULT_PROMPT_SUFFIX,
+        resize_mode: str = "pad",
+        background_color: tuple[int, int, int] = (255, 255, 255),
+        selected_indices: list[int] | set[int] | None = None,
+        max_records: int | None = None,
+        streaming: bool = True,
+    ) -> None:
+        super().__init__(
+            tokenizer=tokenizer,
+            resolution=resolution,
+            prompt_suffix=prompt_suffix,
+            resize_mode=resize_mode,
+            background_color=background_color,
+        )
+        self.dataset_name = dataset_name
+        self.dataset_config_name = dataset_config_name
+        self.split = split
+        self.original_image_column = original_image_column
+        self.edited_image_column = edited_image_column
+        self.edit_prompt_column = edit_prompt_column
+        self.selected_indices = list(selected_indices) if selected_indices is not None else None
+        self.max_records = max_records
+        self.streaming = streaming
+        self._rows: list[dict[str, Any]] | None = None
+
+    def planned_record_count(self) -> int | None:
+        if self.selected_indices is not None:
+            selected_count = len(self.selected_indices)
+            if self.max_records is None:
+                return selected_count
+            return min(selected_count, self.max_records)
+        return self.max_records
+
+    def is_materialized(self) -> bool:
+        return self._rows is not None
+
+    def _ensure_rows(self) -> None:
+        if self._rows is not None:
+            return
+
+        try:
+            from datasets import load_dataset
+        except ImportError as exc:
+            raise ImportError(
+                "datasets is required to materialize Hugging Face validation rows."
+            ) from exc
+
+        planned_count = self.planned_record_count()
+        message = (
+            f"Materializing Hugging Face validation subset from split '{self.split}'"
+        )
+        if planned_count is not None:
+            message += f" (up to {planned_count} rows)"
+        print(message, flush=True)
+
+        dataset = load_dataset(
+            path=self.dataset_name,
+            name=self.dataset_config_name,
+            split=self.split,
+            streaming=self.streaming,
+        )
+        rows = materialize_hf_rows(
+            dataset=dataset,
+            original_image_column=self.original_image_column,
+            edited_image_column=self.edited_image_column,
+            edit_prompt_column=self.edit_prompt_column,
+            selected_indices=set(self.selected_indices) if self.selected_indices is not None else None,
+            max_records=self.max_records,
+        )
+        if not rows:
+            raise ValueError(
+                f"No Hugging Face validation rows were materialized from split '{self.split}'."
+            )
+
+        self._rows = rows
+        print(
+            f"Finished materializing {len(rows)} Hugging Face validation rows from split '{self.split}'.",
+            flush=True,
+        )
+
+    def __len__(self) -> int:
+        self._ensure_rows()
+        return len(self._rows or [])
+
+    def _get_raw_example(self, index: int) -> dict[str, Any]:
+        self._ensure_rows()
+        if self._rows is None:
+            raise RuntimeError("Validation rows were not materialized.")
+        return self._rows[index]
+
+
 class StreamingPix2PixJsonlDataset(IterableDataset):
     def __init__(
         self,
@@ -564,6 +711,235 @@ class Pix2PixHFDataset(BasePix2PixDataset):
             "edit_prompt": str(row[self.edit_prompt_column]),
             "record": {"index": index},
         }
+
+
+def _validate_hf_columns(
+    dataset: Any,
+    original_image_column: str,
+    edited_image_column: str,
+    edit_prompt_column: str,
+) -> None:
+    column_names = set(getattr(dataset, "column_names", []) or [])
+    required_columns = {
+        original_image_column,
+        edited_image_column,
+        edit_prompt_column,
+    }
+    missing_columns = sorted(required_columns - column_names)
+    if missing_columns:
+        raise ValueError("Missing dataset columns: " + ", ".join(missing_columns))
+
+
+def iterate_hf_records(
+    dataset: Any,
+    original_image_column: str,
+    edited_image_column: str,
+    edit_prompt_column: str,
+    selected_indices: set[int] | None = None,
+    max_records: int | None = None,
+) -> Iterable[dict[str, Any]]:
+    _validate_hf_columns(
+        dataset,
+        original_image_column=original_image_column,
+        edited_image_column=edited_image_column,
+        edit_prompt_column=edit_prompt_column,
+    )
+
+    yielded_records = 0
+    for row_index, row in enumerate(dataset):
+        if selected_indices is not None and row_index not in selected_indices:
+            continue
+
+        try:
+            original_image = row[original_image_column]
+            edited_image = row[edited_image_column]
+            edit_prompt = row[edit_prompt_column]
+        except KeyError as exc:
+            raise KeyError(
+                "Missing required column in Hugging Face dataset row: "
+                f"{exc!s}."
+            ) from exc
+
+        yield {
+            "original_image": original_image,
+            "edited_image": edited_image,
+            "edit_prompt": str(edit_prompt),
+            "record": {"index": row_index},
+        }
+        yielded_records += 1
+
+        if max_records is not None and yielded_records >= max_records:
+            break
+
+
+def materialize_hf_rows(
+    dataset: Any,
+    original_image_column: str,
+    edited_image_column: str,
+    edit_prompt_column: str,
+    selected_indices: set[int] | None = None,
+    max_records: int | None = None,
+) -> list[dict[str, Any]]:
+    return list(
+        iterate_hf_records(
+            dataset=dataset,
+            original_image_column=original_image_column,
+            edited_image_column=edited_image_column,
+            edit_prompt_column=edit_prompt_column,
+            selected_indices=selected_indices,
+            max_records=max_records,
+        )
+    )
+
+
+def iterate_hf_row_chunks_by_sorted_indices(
+    dataset: Any,
+    original_image_column: str,
+    edited_image_column: str,
+    edit_prompt_column: str,
+    selected_indices: list[int],
+    chunk_size: int,
+) -> Iterable[list[dict[str, Any]]]:
+    _validate_hf_columns(
+        dataset,
+        original_image_column=original_image_column,
+        edited_image_column=edited_image_column,
+        edit_prompt_column=edit_prompt_column,
+    )
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be >= 1.")
+    if not selected_indices:
+        return
+
+    ordered_targets = sorted({int(index) for index in selected_indices})
+    target_position = 0
+    current_chunk: list[dict[str, Any]] = []
+
+    for row_index, row in enumerate(dataset):
+        while target_position < len(ordered_targets) and ordered_targets[target_position] < row_index:
+            target_position += 1
+
+        if target_position >= len(ordered_targets):
+            break
+
+        if row_index != ordered_targets[target_position]:
+            continue
+
+        try:
+            original_image = row[original_image_column]
+            edited_image = row[edited_image_column]
+            edit_prompt = row[edit_prompt_column]
+        except KeyError as exc:
+            raise KeyError(
+                "Missing required column in Hugging Face dataset row: "
+                f"{exc!s}."
+            ) from exc
+
+        current_chunk.append(
+            {
+                "original_image": original_image,
+                "edited_image": edited_image,
+                "edit_prompt": str(edit_prompt),
+                "record": {"index": row_index},
+            }
+        )
+        target_position += 1
+
+        if len(current_chunk) >= chunk_size:
+            yield current_chunk
+            current_chunk = []
+
+    if current_chunk:
+        yield current_chunk
+
+
+class StreamingPix2PixHFDataset(IterableDataset):
+    def __init__(
+        self,
+        dataset: Any,
+        original_image_column: str,
+        edited_image_column: str,
+        edit_prompt_column: str,
+        tokenizer: PreTrainedTokenizerBase | None = None,
+        resolution: int = 512,
+        prompt_suffix: str = DEFAULT_PROMPT_SUFFIX,
+        resize_mode: str = "pad",
+        background_color: tuple[int, int, int] = (255, 255, 255),
+        selected_indices: set[int] | None = None,
+        max_records: int | None = None,
+    ) -> None:
+        super().__init__()
+        _validate_hf_columns(
+            dataset,
+            original_image_column=original_image_column,
+            edited_image_column=edited_image_column,
+            edit_prompt_column=edit_prompt_column,
+        )
+        self.dataset = dataset
+        self.original_image_column = original_image_column
+        self.edited_image_column = edited_image_column
+        self.edit_prompt_column = edit_prompt_column
+        self.tokenizer = tokenizer
+        self.resolution = int(resolution)
+        self.prompt_suffix = prompt_suffix
+        self.resize_mode = resize_mode
+        self.background_color = background_color
+        self.selected_indices = set(selected_indices) if selected_indices is not None else None
+        self.max_records = max_records
+        self.to_tensor = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+            ]
+        )
+
+    def planned_record_count(self) -> int | None:
+        if self.selected_indices is not None:
+            selected_count = len(self.selected_indices)
+            if self.max_records is None:
+                return selected_count
+            return min(selected_count, self.max_records)
+        return self.max_records
+
+    def _prepare_loaded_image(self, image_value: Any, field_name: str) -> Image.Image:
+        pil_image = coerce_image_to_pil(image_value, field_name)
+        return prepare_square_image(
+            pil_image,
+            resolution=self.resolution,
+            resize_mode=self.resize_mode,
+            background_color=self.background_color,
+        )
+
+    def _build_item(self, row: dict[str, Any]) -> dict[str, Any]:
+        prompt = build_training_prompt(str(row["edit_prompt"]), self.prompt_suffix)
+        original_image = self._prepare_loaded_image(row["original_image"], "original_image")
+        edited_image = self._prepare_loaded_image(row["edited_image"], "edited_image")
+        item: dict[str, Any] = {
+            "original_pixel_values": self.to_tensor(original_image),
+            "edited_pixel_values": self.to_tensor(edited_image),
+            "prompt": prompt,
+        }
+        if self.tokenizer is not None:
+            tokenized = self.tokenizer(
+                prompt,
+                max_length=self.tokenizer.model_max_length,
+                padding="max_length",
+                truncation=True,
+                return_tensors="pt",
+            )
+            item["input_ids"] = tokenized.input_ids[0]
+        return item
+
+    def __iter__(self):
+        for row in iterate_hf_records(
+            dataset=self.dataset,
+            original_image_column=self.original_image_column,
+            edited_image_column=self.edited_image_column,
+            edit_prompt_column=self.edit_prompt_column,
+            selected_indices=self.selected_indices,
+            max_records=self.max_records,
+        ):
+            yield self._build_item(row)
 
 
 def collate_fn(examples: list[dict[str, Any]]) -> dict[str, Any]:

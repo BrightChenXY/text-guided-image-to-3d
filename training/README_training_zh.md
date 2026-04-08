@@ -1,4 +1,4 @@
-﻿# InstructPix2Pix LoRA 训练说明
+# InstructPix2Pix LoRA 训练说明
 
 [English](README_training.md) | [简体中文](README_training_zh.md)
 
@@ -451,6 +451,7 @@ trellis_eval/
       render_right.png
       render_back.png
       render_top.png
+      render_grid.png
       trellis_preview.png
       trellis_metrics.json
     summary.json
@@ -475,10 +476,20 @@ trellis/front_similarity
 trellis/coverage_score
 trellis/centering_score
 trellis/view_consistency_score
+trellis/connectivity_score
+trellis/border_margin_score
 trellis/previews/sample_00 ...
 ```
 
 这些是用于模型选择的 proxy metrics，不是可反向传播的训练损失。
+
+默认的 rerank 分数现在由下面几部分加权组成：
+- edited image 与 TRELLIS 正视图 render 的 front similarity
+- 更偏向单主体、尺寸适中的 coverage 分数
+- 各视角下主体是否居中的 centering 分数
+- front / left / right / back / top 多视角的一致性
+- connectivity：鼓励一个主要连通主体，惩罚碎片化几何
+- border margin：惩罚主体贴边或被裁切得太紧
 
 ### 9.3 推荐训练命令
 
@@ -519,9 +530,15 @@ pyglet<2
 训练完成后，你可以直接让前端加载下游最优 checkpoint：
 
 ```bash
-set INSTRUCT_PIX2PIX_LORA_PATH=training\outputs\checkpoints\hf_pix2pix_lora\best_checkpoint\lora
+set INSTRUCT_PIX2PIX_LORA_PATH=training\outputs\checkpoints\hf_pix2pix_lora
 set INSTRUCT_PIX2PIX_LORA_SCALE=1.0
 python app.py
 ```
 
+现在前端的 LoRA 路径解析更宽松一些，所以 `INSTRUCT_PIX2PIX_LORA_PATH` 可以直接指向实验根目录、`best_checkpoint` 目录，或者最终的 `lora` 目录。
+
 如果你想改回最终一步保存的权重，仍然使用 `training/outputs/checkpoints/<run_name>/lora` 即可。
+
+
+
+

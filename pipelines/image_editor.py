@@ -32,11 +32,44 @@ def _build_generator(seed: int) -> torch.Generator:
     return torch.Generator().manual_seed(seed)
 
 
+def _looks_like_lora_dir(path: Path) -> bool:
+    if not path.exists() or not path.is_dir():
+        return False
+
+    expected_files = (
+        "pytorch_lora_weights.safetensors",
+        "pytorch_lora_weights.bin",
+        "adapter_model.safetensors",
+        "adapter_model.bin",
+        "adapter_config.json",
+    )
+    return any((path / filename).exists() for filename in expected_files)
+
+
+
 def _resolve_lora_path(lora_path: str | Path | None) -> Path | None:
     candidate = lora_path if lora_path is not None else INSTRUCT_PIX2PIX_LORA_PATH
     if not candidate:
         return None
-    return Path(candidate).expanduser().resolve()
+
+    resolved = Path(candidate).expanduser().resolve()
+    if resolved.is_file() or _looks_like_lora_dir(resolved):
+        return resolved
+
+    if resolved.name == "best_checkpoint":
+        best_lora_dir = resolved / "lora"
+        if _looks_like_lora_dir(best_lora_dir):
+            return best_lora_dir.resolve()
+
+    nested_best_lora_dir = resolved / "best_checkpoint" / "lora"
+    if _looks_like_lora_dir(nested_best_lora_dir):
+        return nested_best_lora_dir.resolve()
+
+    nested_lora_dir = resolved / "lora"
+    if _looks_like_lora_dir(nested_lora_dir):
+        return nested_lora_dir.resolve()
+
+    return resolved
 
 
 def _extract_single_image(result: Any) -> Image.Image:
@@ -151,3 +184,4 @@ def edit_image_with_prompt(
         torch.cuda.empty_cache()
 
     return edited_image
+

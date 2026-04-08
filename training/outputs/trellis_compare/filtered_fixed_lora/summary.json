@@ -1,0 +1,45 @@
+{
+  "sample_count": 16,
+  "lora_path": "E:\\Workspaces\\Python\\text-guided-image-to-3d\\training\\outputs\\checkpoints\\filtered_fixed_lora\\best_checkpoint\\lora",
+  "trellis_render_size": 256,
+  "trellis_seed": 0,
+  "score_weights": {
+    "front_similarity": 0.35,
+    "coverage": 0.15,
+    "centering": 0.15,
+    "view_consistency": 0.15,
+    "connectivity": 0.1,
+    "border_margin": 0.1
+  },
+  "baseline": {
+    "mean_metrics": {
+      "front_similarity": 0.510506,
+      "mean_coverage_score": 0.211668,
+      "mean_centering_score": 0.981371,
+      "mean_connectivity_score": 0.902049,
+      "mean_border_margin_score": 1.0,
+      "overall_score": 0.62913
+    },
+    "success_rate": 0.9375
+  },
+  "lora": {
+    "mean_metrics": {
+      "front_similarity": 0.501555,
+      "mean_coverage_score": 0.34862,
+      "mean_centering_score": 0.980732,
+      "mean_connectivity_score": 0.947813,
+      "mean_border_margin_score": 1.0,
+      "overall_score": 0.550259
+    },
+    "success_rate": 0.8125
+  },
+  "delta": {
+    "front_similarity": -0.008951,
+    "mean_coverage_score": 0.136952,
+    "mean_centering_score": -0.000639,
+    "mean_connectivity_score": 0.045764,
+    "mean_border_margin_score": 0.0,
+    "overall_score": -0.078871
+  },
+  "better_model": "baseline"
+}

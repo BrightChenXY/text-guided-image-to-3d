@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
-一个基于 Gradio 的演示项目，支持通过 InstructPix2Pix 进行文本引导图像编辑，并通过 TRELLIS NVIDIA NIM 远程后端生成 3D 结果。在Linux/WSL上部署，可直接查看 [Quickstart](#quickstart)。
+一个基于 Gradio 的演示项目，支持通过 InstructPix2Pix 进行文本引导图像编辑，并通过 TRELLIS NVIDIA NIM 远程后端生成 3D 结果。在 Linux/WSL 上部署，可直接查看 [Quickstart](#quickstart)。
 
 ## Features
 
@@ -41,6 +41,7 @@ conda activate text-guided-image-to-3d
 ```
 
 如果你本地修改了 `environment.yml` 里的环境名称，请激活修改后的实际名称，或者先把文件中的名称改回再创建环境。
+这个 Conda 环境已经按 GPU 路线配置好了 `pytorch=2.5.1`、`torchvision=0.20.1` 和 `pytorch-cuda=12.1`。
 
 ### `uv` setup *(推荐)*
 
@@ -55,6 +56,7 @@ uv sync
 ```
 
 这个仓库按非打包应用方式配置了 `uv`（`tool.uv.package = false`），因此优先推荐使用 `uv sync`。如果你更习惯基于 `requirements.txt` 的流程，或者本地 `uv` 版本在当前结构下不适合使用 `sync`，也可以改用 `uv pip install -r requirements.txt`。
+`pyproject.toml` 已经配置为让 `uv` 从官方 PyTorch CUDA 12.1 索引拉取 `torch` 和 `torchvision`。
 
 ### `pip` setup *(不推荐)*
 
@@ -69,6 +71,22 @@ pip install -r requirements.txt
 ```
 
 请确认当前环境中的 `python` 指向 Python 3.10。
+`requirements.txt` 现在也固定到了 CUDA 12.1 的 `torch` 和 `torchvision` wheel，因此这条路径同样可以用于 GPU 推理和训练。
+
+### 验证 GPU 是否可用
+
+环境安装完成后，可以用下面的命令确认 PyTorch 是否已经识别到 GPU：
+
+```bash
+python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.version.cuda); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'No GPU detected')"
+```
+
+正常情况下，输出里应当包含：
+
+- 形如 `2.5.1+cu121` 的 CUDA 版 PyTorch
+- `torch.cuda.is_available()` 为 `True`
+- 类似 `12.1` 的 CUDA runtime 版本
+- 你的 NVIDIA GPU 名称
 
 ## ② 部署 TRELLIS 后端
 
@@ -82,7 +100,7 @@ pip install -r requirements.txt
 - 首次启动时可以联网，以便容器下载模型并完成预热。
 - 宿主环境为 Linux 或 WSL2。
 
-NVIDIA 的 Visual GenAI NIM 文档要求使用 **NGC personal API key**，并在拉取容器前通过 NVIDIA NGC 完成认证。文档同时说明 Visual GenAI NIM 可以运行在 **WSL** 上，而 WSL 支持目前处于 **Public Beta** 阶段。:contentReference[oaicite:2]{index=2}
+NVIDIA 的 Visual GenAI NIM 文档要求使用 **NGC personal API key**，并在拉取容器前通过 NVIDIA NGC 完成认证。文档同时说明 Visual GenAI NIM 可以运行在 **WSL** 上，而 WSL 支持目前处于 **Public Beta** 阶段。
 
 ### Step 1: 导出 NGC API key
 
@@ -217,6 +235,79 @@ python app.py
 
 启动后，Gradio 会在终端输出本地访问地址。用浏览器打开即可体验演示。
 
+# 训练
+
+更完整的训练说明，包括 LoRA 微调、本地 JSONL 数据集、Hugging Face 在线数据集、子集过滤、流式训练、TRELLIS rerank 验证和 checkpoint 对比，请查看 [training/README_training_zh.md](training/README_training_zh.md)。
+
+## Hugging Face 在线训练
+
+训练脚本支持直接从 Hugging Face 数据集下载并训练，例如 `timbrooks/instructpix2pix-clip-filtered`。
+
+基础 Hugging Face 数据集模式：
+
+```bash
+accelerate launch training/train_lora_pix2pix.py \
+  --dataset-name timbrooks/instructpix2pix-clip-filtered \
+  --train-split train \
+  --original-image-column original_image \
+  --edited-image-column edited_image \
+  --edit-prompt-column edit_prompt \
+  --output-dir training/outputs/checkpoints/hf_baseline
+```
+
+如果数据集本身没有单独的验证集 split，可以从训练集里自动切出一部分作为验证集：
+
+```bash
+accelerate launch training/train_lora_pix2pix.py \
+  --dataset-name timbrooks/instructpix2pix-clip-filtered \
+  --train-split train \
+  --validation-from-train-ratio 0.05 \
+  --original-image-column original_image \
+  --edited-image-column edited_image \
+  --edit-prompt-column edit_prompt \
+  --output-dir training/outputs/checkpoints/hf_baseline
+```
+
+如果你想在本地图片还在持续补充时边准备数据边训练，项目也支持基于 `metadata.jsonl` 和 `training/data/final_indices.json` 的本地流式子集训练。完整流程请见 [training/README_training_zh.md](training/README_training_zh.md)。
+
+## 使用 TensorBoard 查看训练过程
+
+默认情况下，训练日志会写到：
+
+```text
+<output_dir>/tensorboard
+```
+
+例如如果你的训练命令里使用了：
+
+```text
+--output-dir training/outputs/checkpoints/filtered_stream_lora
+```
+
+那么 TensorBoard 日志目录就是：
+
+```text
+training/outputs/checkpoints/filtered_stream_lora/tensorboard
+```
+
+可以用下面的命令启动 TensorBoard：
+
+```bash
+tensorboard --logdir training/outputs/checkpoints/filtered_stream_lora/tensorboard
+```
+
+然后在浏览器中打开终端里显示的本地地址，通常是 `http://localhost:6006`。
+
+建议重点观察这些标签：
+
+- `train/loss`：原始 diffusion 训练损失。
+- `train/learning_rate`：当前优化器学习率。
+- `val/loss`：启用验证时的验证集损失。
+- `val/previews/*`：保存下来的验证预览图。
+- `trellis/*`：启用 TRELLIS rerank 验证后写入的下游 3D proxy 指标。
+
+如果你多次复用同一个输出目录，TensorBoard 会把该目录下的所有事件文件一起读取。为了更干净地比较实验，建议为每次实验使用新的 `--output-dir`，或者显式指定单独的 `--tensorboard-log-dir`。
+
 # Dependencies / Tech Stack
 
 - Gradio：Web 界面。
@@ -233,6 +324,6 @@ python app.py
 - 生成结果会写入 `outputs/` 目录，包括编辑后的图片和导出的 `.glb` 文件。
 - `requirements.txt`、`environment.yml` 和 `pyproject.toml` 已对依赖范围做了约束，以保持与 Python 3.10 环境一致。
 
-<!-- # License
+# 许可证
 
-暂未添加许可证信息。 -->
+本项目基于 MIT License 发布。完整许可证内容请查看 [LICENSE](LICENSE)。

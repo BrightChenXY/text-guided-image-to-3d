@@ -1,6 +1,6 @@
 # text-guided-image-to-3d
 
-[English] | [简体中文](README_zh.md)
+[English](README.md) | [简体中文](README_zh.md)
 
 Gradio demo for text-guided image editing with InstructPix2Pix and remote 3D generation powered by a TRELLIS NVIDIA NIM backend. [Quickstart](#quickstart) on **Linux/WSL**.
 
@@ -30,8 +30,10 @@ Gradio demo for text-guided image editing with InstructPix2Pix and remote 3D gen
   
 
 # Quickstart<a id="quickstart"></a>
-## Ⅰ. Dependencies installment:
-### `conda` setup *(Recommand)*
+## Inference
+### 1. Install Dependencies
+Choose one of the following environment setup options.
+#### `conda` setup *(Recommended)*
 
 ```bash
 git clone https://github.com/BrightChenXY/text-guided-image-to-3d.git
@@ -41,8 +43,9 @@ conda activate text-guided-image-to-3d
 ```
 
 If the environment name inside `environment.yml` is changed locally, activate that exact name or rename it in the file before creating the environment.
+This Conda environment is configured for GPU-ready PyTorch with CUDA 12.1 via `pytorch=2.5.1`, `torchvision=0.20.1`, and `pytorch-cuda=12.1`.
 
-### `uv` setup *(Recommand)*
+#### `uv` setup *(Recommended)*
 
 ```bash
 git clone https://github.com/BrightChenXY/text-guided-image-to-3d.git
@@ -55,8 +58,9 @@ uv sync
 ```
 
 This repository is configured as a non-packaged app (`tool.uv.package = false`), so `uv sync` is the preferred workflow. If you prefer a requirements-based flow or your local `uv` setup does not use `sync` here, you can fall back to `uv pip install -r requirements.txt`.
+The `pyproject.toml` file is configured so `uv` pulls `torch` and `torchvision` from the official PyTorch CUDA 12.1 index.
 
-### `pip` setup *(Not Recommand)*
+#### `pip` setup *(Not Recommended)*
 
 ```bash
 git clone https://github.com/BrightChenXY/text-guided-image-to-3d.git
@@ -69,10 +73,26 @@ pip install -r requirements.txt
 ```
 
 Make sure the `python` executable in the environment is Python 3.10.
+The `requirements.txt` file pins the CUDA 12.1 wheels for `torch` and `torchvision`, so this route is also suitable for GPU inference and training.
+
+#### Verify GPU availability
+
+After installing the environment, verify that PyTorch can see your GPU:
+
+```bash
+python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.version.cuda); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'No GPU detected')"
+```
+
+Expected output on a working GPU setup should show:
+
+- a CUDA-enabled PyTorch build such as `2.5.1+cu121`
+- `True` for `torch.cuda.is_available()`
+- a CUDA runtime version such as `12.1`
+- the name of your NVIDIA GPU
 
 
-## Ⅱ. Trellis backend deployment:
-### Backend prerequisites
+### 2. Deploy the TRELLIS Backend
+#### Backend prerequisites
 
 Before starting the container, make sure the backend machine has:
 
@@ -82,30 +102,30 @@ Before starting the container, make sure the backend machine has:
 - Internet access for the first startup, so the container can download and warm up the model
 - Linux or WSL2 as the host environment
 
-NVIDIA’s Visual GenAI NIM docs require an **NGC personal API key** and use it to authenticate against NVIDIA NGC before pulling the container. NVIDIA also notes that Visual GenAI NIMs can run on **WSL**, and that WSL support is currently in **Public Beta**. :contentReference[oaicite:2]{index=2}
+NVIDIA’s Visual GenAI NIM docs require an **NGC personal API key** and use it to authenticate against NVIDIA NGC before pulling the container. NVIDIA also notes that Visual GenAI NIMs can run on **WSL**, and that WSL support is currently in **Public Beta**.
 
-### Step 1: Export your NGC API key
-You should get an api key here: https://build.nvidia.com/microsoft/trellis
+#### Step 1: Export your NGC API key
+You can get an API key here: https://build.nvidia.com/microsoft/trellis
 
 ```bash
 export NGC_API_KEY="<PASTE_YOUR_NGC_API_KEY_HERE>"
 ```
 NVIDIA’s NIM docs use $oauthtoken as the username and the NGC API key as the password for container registry login.
 
-### Step 2: Login to NVIDIA NGC
+#### Step 2: Login to NVIDIA NGC
 ```bash
 echo "$NGC_API_KEY" | docker login nvcr.io --username '$oauthtoken' --password-stdin
 ```
 
-### Step 3: Create a local NIM cache directory
+#### Step 3: Create a local NIM cache directory
 ```bash
 export LOCAL_NIM_CACHE=~/.cache/nim
 mkdir -p "$LOCAL_NIM_CACHE"
 chmod 777 "$LOCAL_NIM_CACHE"
 ```
-he cache directory is mounted into the container so model files and warmup artifacts do not need to be re-downloaded every time. NVIDIA’s deploy page and getting-started guide both mount a local cache into `/opt/nim/.cache/`.
+The cache directory is mounted into the container so model files and warmup artifacts do not need to be re-downloaded every time. NVIDIA's deploy page and getting-started guide both mount a local cache into `/opt/nim/.cache/`.
 
-### Step 4: Start the TRELLIS NIM container
+#### Step 4: Start the TRELLIS NIM container
 ```bash
 docker run -it --rm --name=nim-server \
   --runtime=nvidia --gpus='"device=0"' \
@@ -122,7 +142,7 @@ If you want to control which TRELLIS variant is loaded, change parameter `-e NIM
 - `large:image`
 - `large:text+large:image`
 
-### Step 5: Check that the service is ready
+#### Step 5: Check that the service is ready
 ```bash
 curl -X GET http://localhost:8000/v1/health/ready
 ```
@@ -132,7 +152,7 @@ A ready server returns:
 ```
 NVIDIA documents `/v1/health/ready` as the readiness check for the running NIM service.
 
-### Step 5: Test the TRELLIS NIM API
+#### Step 6: Test the TRELLIS NIM API
 A simple test request looks like this:
 ```bash
 invoke_url="http://localhost:8000/v1/infer"
@@ -151,7 +171,7 @@ echo $response_body | jq .artifacts[0].base64 | tr -d '"' | base64 --decode > $o
 ```
 NVIDIA’s TRELLIS NIM deploy page shows this exact flow: send a request to http://localhost:8000/v1/infer, then decode artifacts[0].base64 into a .glb file.
 
-### Step 6: Text/Image-to-3D payloads
+#### Step 7: Text/Image-to-3D payloads
 NVIDIA’s Visual GenAI performance guide shows TRELLIS payloads with:
 
 - `mode: "text"` plus prompt for text-to-3D
@@ -176,7 +196,7 @@ curl -X POST http://localhost:8000/v1/infer \
 ```
 In this repository, that API call is typically wrapped by `pipelines/trellis_client.py`, so your app code does not need to manually construct curl requests during normal usage. The backend URL should be kept in `config.py`. This is an integration detail of this repo; the request structure itself follows NVIDIA’s published TRELLIS NIM examples.
 
-### Step 7: Point the frontend to the backend
+#### Step 8: Point the frontend to the backend
 After the NIM container is running, update the TRELLIS backend URL in **`config.py`** so the local Gradio app sends generation requests to the correct host and port.
 
 Typical local deployment:
@@ -185,7 +205,7 @@ TRELLIS_BASE_URL = "http://localhost:8000/v1/infer" # Change it to your API
 ```
 If the backend is running on another Linux/WSL machine, replace localhost with that machine’s reachable IP or hostname.
 
-## Ⅲ. Running the Front-end App
+### 3. Run the Front-end App
 
 Launch the Gradio app with:
 
@@ -194,6 +214,80 @@ python app.py
 ```
 
 After launch, Gradio will print a local URL in the terminal. Open it in your browser to use the demo.
+
+
+## Training
+
+For full training details, including LoRA fine-tuning, local JSONL datasets, Hugging Face online datasets, subset filtering, streaming training, TRELLIS rerank validation, and checkpoint comparison, see [training/README_training.md](training/README_training.md).
+
+### Hugging Face Online Training
+
+The training script supports downloading and training directly from a Hugging Face dataset such as `timbrooks/instructpix2pix-clip-filtered`.
+
+Basic Hugging Face dataset mode:
+
+```bash
+accelerate launch training/train_lora_pix2pix.py \
+  --dataset-name timbrooks/instructpix2pix-clip-filtered \
+  --train-split train \
+  --original-image-column original_image \
+  --edited-image-column edited_image \
+  --edit-prompt-column edit_prompt \
+  --output-dir training/outputs/checkpoints/hf_baseline
+```
+
+If the dataset does not ship with a validation split, carve one out automatically from the training split:
+
+```bash
+accelerate launch training/train_lora_pix2pix.py \
+  --dataset-name timbrooks/instructpix2pix-clip-filtered \
+  --train-split train \
+  --validation-from-train-ratio 0.05 \
+  --original-image-column original_image \
+  --edited-image-column edited_image \
+  --edit-prompt-column edit_prompt \
+  --output-dir training/outputs/checkpoints/hf_baseline
+```
+
+If you want to train while data is still arriving locally, the project also supports local streaming subset training from `metadata.jsonl` plus filtered indices such as `training/data/final_indices.json`. See [training/README_training.md](training/README_training.md) for the full workflow.
+
+### View Training Curves with TensorBoard
+
+By default, training logs are written to:
+
+```text
+<output_dir>/tensorboard
+```
+
+For example, if you train with:
+
+```text
+--output-dir training/outputs/checkpoints/filtered_stream_lora
+```
+
+then the TensorBoard log directory is:
+
+```text
+training/outputs/checkpoints/filtered_stream_lora/tensorboard
+```
+
+Launch TensorBoard with:
+
+```bash
+tensorboard --logdir training/outputs/checkpoints/filtered_stream_lora/tensorboard
+```
+
+Then open the local URL shown in the terminal, usually `http://localhost:6006`.
+
+Recommended tags to monitor:
+
+- `train/loss`: raw diffusion training loss.
+- `train/learning_rate`: the current optimiser learning rate.
+- `val/loss`: validation loss, when validation is enabled.
+- `val/previews/*`: saved validation preview strips.
+- `trellis/*`: downstream 3D proxy metrics when TRELLIS rerank validation is enabled.
+
+If you reuse the same output directory across multiple runs, TensorBoard will read all event files in that directory. For clean comparisons, use a fresh `--output-dir` or set a dedicated `--tensorboard-log-dir` for each experiment.
 
 # Dependencies / Tech Stack
 
@@ -213,6 +307,7 @@ After launch, Gradio will print a local URL in the terminal. Open it in your bro
 - Generated files are written under `outputs/`, including edited images and exported `.glb` assets.
 - Dependency versions are pinned through `requirements.txt`, `environment.yml`, and `pyproject.toml` to keep the setup aligned with Python 3.10.
 
-<!-- # License
 
-License information has not been added yet. -->
+# License
+
+This project is released under the MIT License. See [LICENSE](LICENSE) for the full text.

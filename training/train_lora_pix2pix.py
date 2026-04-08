@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
 import time
 from contextlib import nullcontext
@@ -28,7 +29,7 @@ from diffusers.optimization import get_scheduler
 from peft import LoraConfig
 from PIL import Image
 from torch.optim import AdamW
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, IterableDataset as TorchIterableDataset
 from torch.utils.tensorboard import SummaryWriter
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
@@ -37,9 +38,14 @@ from training.dataset import (
     DEFAULT_PROMPT_SUFFIX,
     BasePix2PixDataset,
     Pix2PixHFDataset,
+    LazyPix2PixHFDataset,
     Pix2PixJsonlDataset,
+    Pix2PixRowsDataset,
+    StreamingPix2PixHFDataset,
     StreamingPix2PixJsonlDataset,
     collate_fn,
+    iterate_hf_row_chunks_by_sorted_indices,
+    load_index_filter_values,
 )
 
 try:
@@ -137,13 +143,13 @@ def parse_args() -> argparse.Namespace:
         "--train-index-filter-json",
         type=Path,
         default=None,
-        help="Optional JSON list of allowed metadata indices for local metadata mode. Use training/data/final_indices.json here.",
+        help="Optional JSON list of allowed dataset indices. In HF mode this can point to training/data/final_indices.json.",
     )
     parser.add_argument(
         "--val-index-filter-json",
         type=Path,
         default=None,
-        help="Optional JSON list of allowed metadata indices for local validation metadata mode.",
+        help="Optional JSON list of allowed validation indices. In HF mode these indices are interpreted within the chosen validation split.",
     )
     parser.add_argument(
         "--metadata-index-field",
@@ -153,20 +159,55 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--max-train-records",
+        "--max-train-images",
+        dest="max_train_records",
         type=int,
         default=None,
-        help="Optionally cap the number of filtered training records.",
+        help="Optionally cap the number of filtered training images used for each train pass.",
     )
     parser.add_argument(
         "--max-val-records",
+        "--max-val-images",
+        dest="max_val_records",
         type=int,
         default=None,
-        help="Optionally cap the number of filtered validation records.",
+        help="Optionally cap the number of filtered validation images.",
     )
     parser.add_argument(
         "--stream-train-jsonl",
         action="store_true",
         help="In local metadata mode, rescan metadata.jsonl every epoch and only consume currently available filtered images. Useful for download-while-training workflows.",
+    )
+    parser.add_argument(
+        "--stream-hf-train",
+        action="store_true",
+        help="In Hugging Face dataset mode, stream the train split instead of downloading the whole split before training.",
+    )
+    parser.add_argument(
+        "--hf-online-chunk-mode",
+        action="store_true",
+        help=(
+            "When used with --dataset-name and --stream-hf-train, fetch filtered HF rows in fixed-size chunks, "
+            "split each chunk into train/val, and train/validate progressively."
+        ),
+    )
+    parser.add_argument(
+        "--hf-online-total-size",
+        type=int,
+        default=None,
+        help="Optional cap on how many filtered HF indices participate in the online chunked training run.",
+    )
+    parser.add_argument(
+        "--hf-online-chunk-size",
+        type=int,
+        default=1000,
+        help="How many filtered HF rows to fetch per online chunk before splitting into train/val.",
+    )
+    parser.add_argument(
+        "--hf-online-val-ratio",
+        type=float,
+        default=0.2,
+        help="Validation ratio applied inside each online chunk. Default: 0.2 for an 80/20 split.",
     )
     parser.add_argument(
         "--skip-missing-train-images",
@@ -225,6 +266,42 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="Seed forwarded to the TRELLIS backend during rerank evaluation.",
+    )
+    parser.add_argument(
+        "--trellis-front-similarity-weight",
+        type=float,
+        default=0.35,
+        help="Weight for front-view similarity inside TRELLIS rerank scoring.",
+    )
+    parser.add_argument(
+        "--trellis-coverage-weight",
+        type=float,
+        default=0.15,
+        help="Weight for single-object coverage score inside TRELLIS rerank scoring.",
+    )
+    parser.add_argument(
+        "--trellis-centering-weight",
+        type=float,
+        default=0.15,
+        help="Weight for centered-object score inside TRELLIS rerank scoring.",
+    )
+    parser.add_argument(
+        "--trellis-view-consistency-weight",
+        type=float,
+        default=0.15,
+        help="Weight for multi-view coverage consistency inside TRELLIS rerank scoring.",
+    )
+    parser.add_argument(
+        "--trellis-connectivity-weight",
+        type=float,
+        default=0.10,
+        help="Weight for single-component connectivity across rendered views.",
+    )
+    parser.add_argument(
+        "--trellis-border-margin-weight",
+        type=float,
+        default=0.10,
+        help="Weight for keeping rendered objects away from image borders.",
     )
     parser.add_argument(
         "--resolution",
@@ -390,15 +467,33 @@ def validate_args(args: argparse.Namespace) -> str:
         raise ValueError("--trellis-eval-samples must be >= 1.")
     if args.trellis_render_size < 64:
         raise ValueError("--trellis-render-size must be >= 64.")
+    trellis_weight_values = [
+        args.trellis_front_similarity_weight,
+        args.trellis_coverage_weight,
+        args.trellis_centering_weight,
+        args.trellis_view_consistency_weight,
+        args.trellis_connectivity_weight,
+        args.trellis_border_margin_weight,
+    ]
+    if any(value < 0 for value in trellis_weight_values):
+        raise ValueError("TRELLIS proxy weights must be >= 0.")
+    if sum(trellis_weight_values) <= 0:
+        raise ValueError("At least one TRELLIS proxy weight must be > 0.")
+    if args.max_train_records is not None and args.max_train_records < 1:
+        raise ValueError("--max-train-records/--max-train-images must be >= 1 when provided.")
+    if args.max_val_records is not None and args.max_val_records < 1:
+        raise ValueError("--max-val-records/--max-val-images must be >= 1 when provided.")
+    if args.hf_online_total_size is not None and args.hf_online_total_size < 1:
+        raise ValueError("--hf-online-total-size must be >= 1 when provided.")
+    if args.hf_online_chunk_size < 2:
+        raise ValueError("--hf-online-chunk-size must be >= 2 so each chunk can be split into train/val.")
+    if args.hf_online_val_ratio <= 0 or args.hf_online_val_ratio >= 1:
+        raise ValueError("--hf-online-val-ratio must be in the range (0, 1).")
 
     if use_hf_dataset:
         if args.train_metadata is not None or args.val_metadata is not None:
             raise ValueError(
                 "dataset-name mode cannot be combined with train-metadata / val-metadata."
-            )
-        if args.train_index_filter_json is not None or args.val_index_filter_json is not None:
-            raise ValueError(
-                "Index-filter JSON files are only supported in local metadata mode."
             )
         if args.stream_train_jsonl:
             raise ValueError("--stream-train-jsonl can only be used together with --train-metadata.")
@@ -410,7 +505,23 @@ def validate_args(args: argparse.Namespace) -> str:
             raise ValueError(
                 "Use either --val-split or --validation-from-train-ratio, not both."
             )
+        if args.hf_online_chunk_mode:
+            if not args.stream_hf_train:
+                raise ValueError("--hf-online-chunk-mode requires --stream-hf-train.")
+            if args.val_split is not None or args.validation_from_train_ratio > 0:
+                raise ValueError(
+                    "--hf-online-chunk-mode manages validation inside each chunk, so do not combine it with --val-split or --validation-from-train-ratio."
+                )
+            if args.val_index_filter_json is not None:
+                raise ValueError("--hf-online-chunk-mode cannot be combined with --val-index-filter-json.")
+            if args.max_train_records is not None or args.max_val_records is not None:
+                raise ValueError(
+                    "Use --hf-online-total-size and --hf-online-chunk-size instead of --max-train-images/--max-val-images in --hf-online-chunk-mode."
+                )
         return "hf"
+
+    if args.stream_hf_train or args.hf_online_chunk_mode:
+        raise ValueError("--stream-hf-train and --hf-online-chunk-mode can only be used together with --dataset-name.")
 
     if args.train_metadata is None:
         raise ValueError(
@@ -423,10 +534,6 @@ def validate_args(args: argparse.Namespace) -> str:
         raise ValueError(
             "--validation-from-train-ratio can only be used together with --dataset-name."
         )
-    if args.max_train_records is not None and args.max_train_records < 1:
-        raise ValueError("--max-train-records must be >= 1 when provided.")
-    if args.max_val_records is not None and args.max_val_records < 1:
-        raise ValueError("--max-val-records must be >= 1 when provided.")
     if args.stream_wait_seconds < 0:
         raise ValueError("--stream-wait-seconds must be >= 0.")
 
@@ -439,6 +546,18 @@ def resolve_mixed_precision(value: str) -> str:
         return "fp16"
     return "no"
 
+
+def build_trellis_proxy_weights(args: argparse.Namespace) -> Any:
+    from training.trellis_eval import TrellisProxyWeights
+
+    return TrellisProxyWeights(
+        front_similarity=args.trellis_front_similarity_weight,
+        coverage=args.trellis_coverage_weight,
+        centering=args.trellis_centering_weight,
+        view_consistency=args.trellis_view_consistency_weight,
+        connectivity=args.trellis_connectivity_weight,
+        border_margin=args.trellis_border_margin_weight,
+    )
 
 def get_weight_dtype(accelerator: Accelerator) -> torch.dtype:
     if accelerator.device.type != "cuda":
@@ -929,6 +1048,7 @@ def run_trellis_rerank(
             "TRELLIS rerank requires trimesh and pyrender. Install them before using --enable-trellis-rerank."
         )
 
+    score_weights = build_trellis_proxy_weights(args)
     pipeline = build_inference_pipeline(
         accelerator=accelerator,
         args=args,
@@ -947,6 +1067,8 @@ def run_trellis_rerank(
     coverage_scores: list[float] = []
     centering_scores: list[float] = []
     consistency_scores: list[float] = []
+    connectivity_scores: list[float] = []
+    border_margin_scores: list[float] = []
     successful_samples = 0
     num_samples = min(args.trellis_eval_samples, len(val_dataset))
 
@@ -987,6 +1109,7 @@ def run_trellis_rerank(
                 work_dir=sample_dir,
                 seed=args.trellis_seed,
                 render_size=args.trellis_render_size,
+                score_weights=score_weights,
             )
 
             sample_score = float(trellis_result.get("score", 0.0) or 0.0)
@@ -996,13 +1119,16 @@ def run_trellis_rerank(
             coverage_scores.append(float(metrics.get("mean_coverage_score", 0.0) or 0.0))
             centering_scores.append(float(metrics.get("mean_centering_score", 0.0) or 0.0))
             consistency_scores.append(float(metrics.get("view_consistency_score", 0.0) or 0.0))
+            connectivity_scores.append(float(metrics.get("mean_connectivity_score", 0.0) or 0.0))
+            border_margin_scores.append(float(metrics.get("mean_border_margin_score", 0.0) or 0.0))
 
             if trellis_result.get("success"):
                 successful_samples += 1
 
             front_render_path = trellis_result.get("render_paths", {}).get("front")
             if front_render_path:
-                front_render = Image.open(front_render_path).convert("RGB")
+                with Image.open(front_render_path) as front_render_image:
+                    front_render = front_render_image.convert("RGB")
                 preview = make_validation_strip(
                     example["original_image"],
                     generated_image,
@@ -1015,7 +1141,6 @@ def run_trellis_rerank(
                     preview=preview,
                     global_step=global_step,
                 )
-
             sample_payloads.append(
                 {
                     "index": index,
@@ -1043,9 +1168,11 @@ def run_trellis_rerank(
         "mean_coverage_score": float(np.mean(coverage_scores)) if coverage_scores else 0.0,
         "mean_centering_score": float(np.mean(centering_scores)) if centering_scores else 0.0,
         "mean_view_consistency_score": float(np.mean(consistency_scores)) if consistency_scores else 0.0,
+        "mean_connectivity_score": float(np.mean(connectivity_scores)) if connectivity_scores else 0.0,
+        "mean_border_margin_score": float(np.mean(border_margin_scores)) if border_margin_scores else 0.0,
+        "score_weights": score_weights.to_dict(),
         "samples": sample_payloads,
     }
-
     with (step_dir / "summary.json").open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2, ensure_ascii=False)
 
@@ -1064,6 +1191,16 @@ def run_trellis_rerank(
         tensorboard_writer.add_scalar(
             "trellis/view_consistency_score",
             summary["mean_view_consistency_score"],
+            global_step,
+        )
+        tensorboard_writer.add_scalar(
+            "trellis/connectivity_score",
+            summary["mean_connectivity_score"],
+            global_step,
+        )
+        tensorboard_writer.add_scalar(
+            "trellis/border_margin_score",
+            summary["mean_border_margin_score"],
             global_step,
         )
 
@@ -1094,6 +1231,15 @@ def run_full_validation_cycle(
     metrics: dict[str, Any] = {"val_loss": None, "trellis_summary": None}
     if val_dataset is None:
         return metrics
+
+    if accelerator.is_main_process:
+        if hasattr(val_dataset, "is_materialized") and not val_dataset.is_materialized():
+            logger.info(
+                "Starting validation at step %s. The Hugging Face validation subset will be materialized now.",
+                global_step,
+            )
+        else:
+            logger.info("Starting validation at step %s.", global_step)
 
     val_loss = compute_validation_loss(
         accelerator=accelerator,
@@ -1148,7 +1294,11 @@ def choose_best_metric(
 ) -> tuple[str, float, bool] | None:
     trellis_summary = validation_metrics.get("trellis_summary")
     if args.enable_trellis_rerank and trellis_summary is not None:
-        return "trellis/mean_score", float(trellis_summary["mean_score"]), True
+        if float(trellis_summary.get("success_rate", 0.0) or 0.0) > 0:
+            return "trellis/mean_score", float(trellis_summary["mean_score"]), True
+        logger.warning(
+            "TRELLIS rerank produced zero successful samples for this validation step. Falling back to val/loss for checkpoint selection."
+        )
 
     val_loss = validation_metrics.get("val_loss")
     if val_loss is not None:
@@ -1169,6 +1319,370 @@ def is_metric_improved(
     return metric_value < best_metric_value
 
 
+def normalize_hf_selected_indices(
+    index_values: list[int | str] | None,
+    source_path: Path | None = None,
+) -> list[int] | None:
+    if index_values is None:
+        return None
+
+    normalized: list[int] = []
+    for item in index_values:
+        if isinstance(item, int):
+            normalized.append(item)
+            continue
+
+        try:
+            normalized.append(int(str(item)))
+        except (TypeError, ValueError) as exc:
+            location = f" in {source_path}" if source_path is not None else ""
+            raise ValueError(
+                "Hugging Face index filters must contain integers only"
+                f"{location}. Got {item!r}."
+            ) from exc
+
+    return normalized
+
+
+
+def split_hf_selected_indices(
+    selected_indices: list[int],
+    validation_ratio: float,
+    seed: int,
+) -> tuple[list[int], list[int]]:
+    indices = list(selected_indices)
+    if validation_ratio <= 0:
+        return indices, []
+    if len(indices) < 2:
+        raise ValueError(
+            "Need at least 2 filtered Hugging Face indices to create a validation split."
+        )
+
+    random.Random(seed).shuffle(indices)
+    validation_count = int(round(len(indices) * validation_ratio))
+    if validation_count < 1:
+        validation_count = 1
+    if validation_count >= len(indices):
+        validation_count = len(indices) - 1
+
+    return indices[validation_count:], indices[:validation_count]
+
+
+
+def build_filtered_hf_map_dataset(
+    dataset: Any,
+    tokenizer: CLIPTokenizer,
+    original_image_column: str,
+    edited_image_column: str,
+    edit_prompt_column: str,
+    selected_indices: list[int] | None,
+    max_records: int | None,
+    common_kwargs: dict[str, Any],
+) -> BasePix2PixDataset:
+    filtered_dataset = dataset
+
+    if selected_indices is not None:
+        chosen_indices = list(selected_indices)
+        if max_records is not None:
+            chosen_indices = chosen_indices[:max_records]
+        if not chosen_indices:
+            raise ValueError("No Hugging Face training rows remain after index filtering.")
+        filtered_dataset = dataset.select(chosen_indices)
+    elif max_records is not None:
+        take_count = min(len(dataset), max_records)
+        if take_count <= 0:
+            raise ValueError("No Hugging Face training rows remain after applying max record cap.")
+        filtered_dataset = dataset.select(list(range(take_count)))
+
+    return Pix2PixHFDataset(
+        dataset=filtered_dataset,
+        original_image_column=original_image_column,
+        edited_image_column=edited_image_column,
+        edit_prompt_column=edit_prompt_column,
+        tokenizer=tokenizer,
+        **common_kwargs,
+    )
+
+
+
+def build_streaming_hf_val_dataset(
+    args: argparse.Namespace,
+    tokenizer: CLIPTokenizer,
+    common_kwargs: dict[str, Any],
+    source_split: str,
+    selected_indices: list[int] | None,
+    max_records: int | None,
+) -> BasePix2PixDataset | None:
+    planned_count = max_records
+    if selected_indices is not None:
+        planned_count = min(len(selected_indices), max_records) if max_records is not None else len(selected_indices)
+        if planned_count <= 0:
+            return None
+
+    return LazyPix2PixHFDataset(
+        dataset_name=args.dataset_name,
+        dataset_config_name=args.dataset_config_name,
+        split=source_split,
+        original_image_column=args.original_image_column,
+        edited_image_column=args.edited_image_column,
+        edit_prompt_column=args.edit_prompt_column,
+        tokenizer=tokenizer,
+        selected_indices=selected_indices,
+        max_records=max_records,
+        streaming=True,
+        **common_kwargs,
+    )
+
+
+
+def plan_hf_online_indices(args: argparse.Namespace) -> list[int]:
+    index_values = normalize_hf_selected_indices(
+        load_index_filter_values(args.train_index_filter_json)
+        if args.train_index_filter_json is not None
+        else None,
+        source_path=args.train_index_filter_json,
+    )
+    if not index_values:
+        raise ValueError(
+            "--hf-online-chunk-mode requires a non-empty HF index filter JSON."
+        )
+
+    ordered_indices = sorted(int(index) for index in index_values)
+    if args.hf_online_total_size is not None:
+        ordered_indices = ordered_indices[: args.hf_online_total_size]
+    if not ordered_indices:
+        raise ValueError(
+            "No HF indices remain after applying --hf-online-total-size."
+        )
+    return ordered_indices
+
+
+
+def split_online_chunk_rows(
+    rows: list[dict[str, Any]],
+    validation_ratio: float,
+    seed: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not rows:
+        return [], []
+    if len(rows) == 1:
+        return list(rows), []
+
+    shuffled_rows = list(rows)
+    random.Random(seed).shuffle(shuffled_rows)
+    validation_count = int(round(len(shuffled_rows) * validation_ratio))
+    if validation_count < 1:
+        validation_count = 1
+    if validation_count >= len(shuffled_rows):
+        validation_count = len(shuffled_rows) - 1
+
+    val_rows = shuffled_rows[:validation_count]
+    train_rows = shuffled_rows[validation_count:]
+    return train_rows, val_rows
+
+
+
+def run_validation_and_update_best(
+    accelerator: Accelerator,
+    args: argparse.Namespace,
+    unet: UNet2DConditionModel,
+    vae: AutoencoderKL,
+    text_encoder: CLIPTextModel,
+    noise_scheduler: DDPMScheduler,
+    val_dataset: BasePix2PixDataset | None,
+    val_dataloader: DataLoader | None,
+    sample_dir: Path,
+    global_step: int,
+    weight_dtype: torch.dtype,
+    empty_prompt_ids: torch.Tensor,
+    tensorboard_writer: SummaryWriter | None,
+    best_metric_name: str | None,
+    best_metric_value: float | None,
+    best_metric_maximize: bool,
+) -> tuple[str | None, float | None, bool]:
+    if val_dataset is None:
+        return best_metric_name, best_metric_value, best_metric_maximize
+
+    validation_metrics = run_full_validation_cycle(
+        accelerator=accelerator,
+        args=args,
+        unet=unet,
+        vae=vae,
+        text_encoder=text_encoder,
+        noise_scheduler=noise_scheduler,
+        val_dataset=val_dataset,
+        val_dataloader=val_dataloader,
+        sample_dir=sample_dir,
+        global_step=global_step,
+        weight_dtype=weight_dtype,
+        empty_prompt_ids=empty_prompt_ids,
+        tensorboard_writer=tensorboard_writer,
+    )
+    metric_info = choose_best_metric(args, validation_metrics)
+    if metric_info is None:
+        return best_metric_name, best_metric_value, best_metric_maximize
+
+    metric_name, metric_value, maximize = metric_info
+    if is_metric_improved(metric_value, best_metric_value, maximize):
+        best_metric_name = metric_name
+        best_metric_value = metric_value
+        best_metric_maximize = maximize
+        best_metadata = {
+            "step": global_step,
+            "metric_name": metric_name,
+            "metric_value": metric_value,
+            "maximize": maximize,
+            "val_loss": validation_metrics.get("val_loss"),
+            "trellis_summary": validation_metrics.get("trellis_summary"),
+        }
+        best_dir = save_best_checkpoint(
+            accelerator=accelerator,
+            unet=unet,
+            output_dir=args.output_dir,
+            metadata=best_metadata,
+        )
+        logger.info(
+            "Updated best checkpoint at step %s using %s=%.4f -> %s",
+            global_step,
+            metric_name,
+            metric_value,
+            best_dir,
+        )
+
+    return best_metric_name, best_metric_value, best_metric_maximize
+
+
+
+def train_on_dataloader(
+    accelerator: Accelerator,
+    args: argparse.Namespace,
+    unet: UNet2DConditionModel,
+    vae: AutoencoderKL,
+    text_encoder: CLIPTextModel,
+    noise_scheduler: DDPMScheduler,
+    optimizer: torch.optim.Optimizer,
+    lr_scheduler: Any,
+    train_dataloader: DataLoader,
+    val_dataset: BasePix2PixDataset | None,
+    val_dataloader: DataLoader | None,
+    sample_dir: Path,
+    progress_bar: tqdm,
+    global_step: int,
+    best_metric_name: str | None,
+    best_metric_value: float | None,
+    best_metric_maximize: bool,
+    weight_dtype: torch.dtype,
+    empty_prompt_ids: torch.Tensor,
+    tensorboard_writer: SummaryWriter | None = None,
+    validation_mode: str = "step",
+) -> tuple[int, str | None, float | None, bool, bool]:
+    made_progress = False
+
+    for batch in train_dataloader:
+        made_progress = True
+        with accelerator.accumulate(unet):
+            loss = compute_batch_loss(
+                batch=batch,
+                unet=unet,
+                vae=vae,
+                text_encoder=text_encoder,
+                noise_scheduler=noise_scheduler,
+                accelerator=accelerator,
+                weight_dtype=weight_dtype,
+                empty_prompt_ids=empty_prompt_ids,
+                conditioning_dropout_prob=args.conditioning_dropout_prob,
+                generator=None,
+                requires_grad=True,
+            )
+
+            accelerator.backward(loss)
+
+            if accelerator.sync_gradients:
+                accelerator.clip_grad_norm_(
+                    [
+                        parameter
+                        for parameter in unet.parameters()
+                        if parameter.requires_grad
+                    ],
+                    args.max_grad_norm,
+                )
+
+            optimizer.step()
+            lr_scheduler.step()
+            optimizer.zero_grad(set_to_none=True)
+
+        if accelerator.sync_gradients:
+            global_step += 1
+            loss_value = float(loss.detach().item())
+            lr_value = float(lr_scheduler.get_last_lr()[0])
+            progress_bar.update(1)
+            progress_bar.set_postfix(
+                loss=f"{loss_value:.4f}",
+                lr=f"{lr_value:.6f}",
+            )
+
+            if tensorboard_writer is not None:
+                tensorboard_writer.add_scalar("train/loss", loss_value, global_step)
+                tensorboard_writer.add_scalar("train/learning_rate", lr_value, global_step)
+
+            if (
+                accelerator.is_main_process
+                and global_step % args.checkpointing_steps == 0
+            ):
+                checkpoint_dir = args.output_dir / f"checkpoint-{global_step:06d}"
+                save_checkpoint(accelerator, unet, checkpoint_dir)
+                logger.info("Saved checkpoint to %s", checkpoint_dir)
+
+            if (
+                validation_mode == "step"
+                and val_dataset is not None
+                and global_step % args.validation_steps == 0
+            ):
+                best_metric_name, best_metric_value, best_metric_maximize = run_validation_and_update_best(
+                    accelerator=accelerator,
+                    args=args,
+                    unet=unet,
+                    vae=vae,
+                    text_encoder=text_encoder,
+                    noise_scheduler=noise_scheduler,
+                    val_dataset=val_dataset,
+                    val_dataloader=val_dataloader,
+                    sample_dir=sample_dir,
+                    global_step=global_step,
+                    weight_dtype=weight_dtype,
+                    empty_prompt_ids=empty_prompt_ids,
+                    tensorboard_writer=tensorboard_writer,
+                    best_metric_name=best_metric_name,
+                    best_metric_value=best_metric_value,
+                    best_metric_maximize=best_metric_maximize,
+                )
+
+        if global_step >= args.max_train_steps:
+            break
+
+    if validation_mode == "chunk" and made_progress and val_dataset is not None:
+        best_metric_name, best_metric_value, best_metric_maximize = run_validation_and_update_best(
+            accelerator=accelerator,
+            args=args,
+            unet=unet,
+            vae=vae,
+            text_encoder=text_encoder,
+            noise_scheduler=noise_scheduler,
+            val_dataset=val_dataset,
+            val_dataloader=val_dataloader,
+            sample_dir=sample_dir,
+            global_step=global_step,
+            weight_dtype=weight_dtype,
+            empty_prompt_ids=empty_prompt_ids,
+            tensorboard_writer=tensorboard_writer,
+            best_metric_name=best_metric_name,
+            best_metric_value=best_metric_value,
+            best_metric_maximize=best_metric_maximize,
+        )
+
+    return global_step, best_metric_name, best_metric_value, best_metric_maximize, made_progress
+
+
 def build_datasets(
     args: argparse.Namespace,
     tokenizer: CLIPTokenizer,
@@ -1181,49 +1695,140 @@ def build_datasets(
     }
 
     if dataset_mode == "hf":
+        train_index_values = normalize_hf_selected_indices(
+            load_index_filter_values(args.train_index_filter_json)
+            if args.train_index_filter_json is not None
+            else None,
+            source_path=args.train_index_filter_json,
+        )
+        val_index_values = normalize_hf_selected_indices(
+            load_index_filter_values(args.val_index_filter_json)
+            if args.val_index_filter_json is not None
+            else None,
+            source_path=args.val_index_filter_json,
+        )
+        val_split_name = args.val_split
+
+        if val_index_values is not None and val_split_name is None:
+            val_split_name = args.train_split
+
+        if args.validation_from_train_ratio > 0:
+            if train_index_values is not None:
+                train_index_values, split_val_indices = split_hf_selected_indices(
+                    train_index_values,
+                    validation_ratio=args.validation_from_train_ratio,
+                    seed=args.seed,
+                )
+                if val_index_values is not None:
+                    raise ValueError(
+                        "Do not combine --val-index-filter-json with --validation-from-train-ratio in HF filtered mode."
+                    )
+                val_index_values = split_val_indices
+                val_split_name = args.train_split
+            elif args.stream_hf_train:
+                raise ValueError(
+                    "--stream-hf-train with --validation-from-train-ratio requires --train-index-filter-json or the auto-detected training/data/final_indices.json."
+                )
+
+        if args.stream_hf_train:
+            train_source = load_dataset(
+                path=args.dataset_name,
+                name=args.dataset_config_name,
+                split=args.train_split,
+                streaming=True,
+            )
+            train_dataset = StreamingPix2PixHFDataset(
+                dataset=train_source,
+                original_image_column=args.original_image_column,
+                edited_image_column=args.edited_image_column,
+                edit_prompt_column=args.edit_prompt_column,
+                tokenizer=tokenizer,
+                selected_indices=set(train_index_values) if train_index_values is not None else None,
+                max_records=args.max_train_records,
+                **common_kwargs,
+            )
+
+            if val_split_name is not None:
+                val_dataset = build_streaming_hf_val_dataset(
+                    args=args,
+                    tokenizer=tokenizer,
+                    common_kwargs=common_kwargs,
+                    source_split=val_split_name,
+                    selected_indices=val_index_values,
+                    max_records=args.max_val_records,
+                )
+            else:
+                val_dataset = None
+
+            return train_dataset, val_dataset
+
         train_source = load_dataset(
             path=args.dataset_name,
             name=args.dataset_config_name,
             split=args.train_split,
         )
 
-        if args.val_split:
-            val_source = load_dataset(
-                path=args.dataset_name,
-                name=args.dataset_config_name,
-                split=args.val_split,
-            )
-        elif args.validation_from_train_ratio > 0:
+        if args.validation_from_train_ratio > 0 and train_index_values is None:
             split_dataset = train_source.train_test_split(
                 test_size=args.validation_from_train_ratio,
                 seed=args.seed,
                 shuffle=True,
             )
-            train_source = split_dataset["train"]
-            val_source = split_dataset["test"]
-        else:
-            val_source = None
-
-        train_dataset = Pix2PixHFDataset(
-            dataset=train_source,
-            original_image_column=args.original_image_column,
-            edited_image_column=args.edited_image_column,
-            edit_prompt_column=args.edit_prompt_column,
-            tokenizer=tokenizer,
-            **common_kwargs,
-        )
-        val_dataset = (
-            Pix2PixHFDataset(
-                dataset=val_source,
+            train_dataset = build_filtered_hf_map_dataset(
+                dataset=split_dataset["train"],
+                tokenizer=tokenizer,
                 original_image_column=args.original_image_column,
                 edited_image_column=args.edited_image_column,
                 edit_prompt_column=args.edit_prompt_column,
-                tokenizer=tokenizer,
-                **common_kwargs,
+                selected_indices=None,
+                max_records=args.max_train_records,
+                common_kwargs=common_kwargs,
             )
-            if val_source is not None
-            else None
+            val_dataset = build_filtered_hf_map_dataset(
+                dataset=split_dataset["test"],
+                tokenizer=tokenizer,
+                original_image_column=args.original_image_column,
+                edited_image_column=args.edited_image_column,
+                edit_prompt_column=args.edit_prompt_column,
+                selected_indices=val_index_values,
+                max_records=args.max_val_records,
+                common_kwargs=common_kwargs,
+            )
+            return train_dataset, val_dataset
+
+        train_dataset = build_filtered_hf_map_dataset(
+            dataset=train_source,
+            tokenizer=tokenizer,
+            original_image_column=args.original_image_column,
+            edited_image_column=args.edited_image_column,
+            edit_prompt_column=args.edit_prompt_column,
+            selected_indices=train_index_values,
+            max_records=args.max_train_records,
+            common_kwargs=common_kwargs,
         )
+
+        if val_split_name is not None:
+            if val_split_name == args.train_split:
+                val_source = train_source
+            else:
+                val_source = load_dataset(
+                    path=args.dataset_name,
+                    name=args.dataset_config_name,
+                    split=val_split_name,
+                )
+            val_dataset = build_filtered_hf_map_dataset(
+                dataset=val_source,
+                tokenizer=tokenizer,
+                original_image_column=args.original_image_column,
+                edited_image_column=args.edited_image_column,
+                edit_prompt_column=args.edit_prompt_column,
+                selected_indices=val_index_values,
+                max_records=args.max_val_records,
+                common_kwargs=common_kwargs,
+            )
+        else:
+            val_dataset = None
+
         return train_dataset, val_dataset
 
     auto_skip_missing_train = args.skip_missing_train_images or (
@@ -1267,6 +1872,7 @@ def build_datasets(
     )
     return train_dataset, val_dataset
 
+
 def main() -> None:
     args = parse_args()
     dataset_mode = validate_args(args)
@@ -1299,6 +1905,19 @@ def main() -> None:
         default_train_filter = args.train_metadata.parent / "final_indices.json"
         if default_train_filter.exists():
             args.train_index_filter_json = default_train_filter.resolve()
+    if (
+        dataset_mode == "hf"
+        and args.train_index_filter_json is None
+        and args.dataset_name == "timbrooks/instructpix2pix-clip-filtered"
+    ):
+        default_hf_filters = [
+            PROJECT_ROOT / "training" / "final_indices.json",
+            PROJECT_ROOT / "training" / "data" / "final_indices.json",
+        ]
+        for candidate_filter in default_hf_filters:
+            if candidate_filter.exists():
+                args.train_index_filter_json = candidate_filter.resolve()
+                break
     args.sample_dir = (
         args.sample_dir.expanduser().resolve()
         if args.sample_dir is not None
@@ -1342,6 +1961,12 @@ def main() -> None:
         args.tensorboard_log_dir.mkdir(parents=True, exist_ok=True)
         write_training_config(args, args.output_dir)
         tensorboard_writer = SummaryWriter(log_dir=str(args.tensorboard_log_dir))
+        tensorboard_writer.add_scalar("run/started", 1.0, 0)
+        tensorboard_writer.flush()
+        tensorboard_message = f"TensorBoard logs directory: {args.tensorboard_log_dir}"
+        logger.info(tensorboard_message)
+        accelerator.print(tensorboard_message)
+        print(tensorboard_message, flush=True)
 
     accelerator.wait_for_everyone()
     set_seed(args.seed)
@@ -1383,37 +2008,102 @@ def main() -> None:
     text_encoder.eval()
     vae.eval()
 
-    train_dataset, val_dataset = build_datasets(
-        args=args,
-        tokenizer=tokenizer,
-        dataset_mode=dataset_mode,
-    )
-    if args.enable_trellis_rerank and val_dataset is None:
-        raise ValueError(
-            "--enable-trellis-rerank requires validation data. Pass --val-metadata, --val-split, or --validation-from-train-ratio."
-        )
+    online_hf_chunk_mode = dataset_mode == "hf" and args.hf_online_chunk_mode
+    online_selected_indices: list[int] | None = None
+    online_chunk_count = 0
+    train_dataset: BasePix2PixDataset | TorchIterableDataset | None = None
+    val_dataset: BasePix2PixDataset | None = None
+    train_dataloader: DataLoader | None = None
+    val_dataloader: DataLoader | None = None
+    is_local_streaming_train = False
+    is_streaming_train = False
 
-    is_streaming_train = isinstance(train_dataset, StreamingPix2PixJsonlDataset)
-    train_dataloader = DataLoader(
-        train_dataset,
-        batch_size=args.train_batch_size,
-        shuffle=not is_streaming_train,
-        num_workers=0 if is_streaming_train else args.num_workers,
-        pin_memory=torch.cuda.is_available(),
-        collate_fn=collate_fn,
-    )
-    val_dataloader = (
-        DataLoader(
-            val_dataset,
+    if online_hf_chunk_mode:
+        if args.train_index_filter_json is None:
+            raise ValueError(
+                "--hf-online-chunk-mode requires --train-index-filter-json or an auto-detected training/final_indices.json."
+            )
+        online_selected_indices = plan_hf_online_indices(args)
+        online_chunk_count = (len(online_selected_indices) + args.hf_online_chunk_size - 1) // args.hf_online_chunk_size
+        if accelerator.is_main_process:
+            prep_message = (
+                "Preparing online chunked Hugging Face training. Filtered indices will be fetched in streaming chunks, split into train/val inside each chunk, and trained progressively."
+            )
+            logger.info(prep_message)
+            accelerator.print(prep_message)
+            print(prep_message, flush=True)
+            logger.info("HF online index filter: %s", args.train_index_filter_json)
+            logger.info("HF online total selected indices: %s", len(online_selected_indices))
+            logger.info("HF online selection strategy: sequential sorted indices for faster startup")
+            logger.info("HF online chunk size: %s", args.hf_online_chunk_size)
+            logger.info("HF online chunk validation ratio: %.4f", args.hf_online_val_ratio)
+            if online_selected_indices:
+                logger.info(
+                    "HF online first chunk should only scan up to index ~%s before training starts.",
+                    online_selected_indices[min(len(online_selected_indices), args.hf_online_chunk_size) - 1],
+                )
+    else:
+        if accelerator.is_main_process and dataset_mode == "hf" and args.stream_hf_train:
+            prep_message = (
+                "Preparing streaming Hugging Face dataset. Expect an initial quiet period while datasets resolves shards and materializes the filtered validation subset."
+            )
+            logger.info(prep_message)
+            accelerator.print(prep_message)
+            print(prep_message, flush=True)
+            if args.train_index_filter_json is not None:
+                filter_message = f"Streaming HF filter file: {args.train_index_filter_json}"
+                logger.info(filter_message)
+                accelerator.print(filter_message)
+                print(filter_message, flush=True)
+            if args.max_train_records is not None:
+                train_cap_message = f"Streaming HF train image cap per pass: {args.max_train_records}"
+                logger.info(train_cap_message)
+                accelerator.print(train_cap_message)
+                print(train_cap_message, flush=True)
+            if args.max_val_records is not None:
+                val_cap_message = f"Streaming HF validation image cap: {args.max_val_records}"
+                logger.info(val_cap_message)
+                accelerator.print(val_cap_message)
+                print(val_cap_message, flush=True)
+        train_dataset, val_dataset = build_datasets(
+            args=args,
+            tokenizer=tokenizer,
+            dataset_mode=dataset_mode,
+        )
+        if accelerator.is_main_process and dataset_mode == "hf" and args.stream_hf_train:
+            finish_message = "Finished preparing streaming Hugging Face datasets."
+            logger.info(finish_message)
+            accelerator.print(finish_message)
+            print(finish_message, flush=True)
+        if args.enable_trellis_rerank and val_dataset is None:
+            raise ValueError(
+                "--enable-trellis-rerank requires validation data. Pass --val-metadata, --val-split, or --validation-from-train-ratio."
+            )
+
+        is_local_streaming_train = isinstance(train_dataset, StreamingPix2PixJsonlDataset)
+        is_streaming_train = isinstance(train_dataset, TorchIterableDataset)
+        train_dataloader = DataLoader(
+            train_dataset,
             batch_size=args.train_batch_size,
-            shuffle=False,
-            num_workers=args.num_workers,
+            shuffle=not is_streaming_train,
+            num_workers=0 if is_streaming_train else args.num_workers,
             pin_memory=torch.cuda.is_available(),
             collate_fn=collate_fn,
         )
-        if val_dataset is not None
-        else None
-    )
+        val_dataloader = (
+            DataLoader(
+                val_dataset,
+                batch_size=args.train_batch_size,
+                shuffle=False,
+                num_workers=args.num_workers,
+                pin_memory=torch.cuda.is_available(),
+                collate_fn=collate_fn,
+            )
+            if val_dataset is not None
+            else None
+        )
+        is_local_streaming_train = isinstance(train_dataset, StreamingPix2PixJsonlDataset)
+        is_streaming_train = isinstance(train_dataset, TorchIterableDataset)
 
     optimizer = AdamW(
         [parameter for parameter in unet.parameters() if parameter.requires_grad],
@@ -1429,12 +2119,13 @@ def main() -> None:
         num_training_steps=args.max_train_steps,
     )
 
-    unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+    unet, optimizer, lr_scheduler = accelerator.prepare(
         unet,
         optimizer,
-        train_dataloader,
         lr_scheduler,
     )
+    if train_dataloader is not None:
+        train_dataloader = accelerator.prepare(train_dataloader)
 
     resumed_global_step = 0
     if args.resume_from_checkpoint is not None:
@@ -1468,22 +2159,60 @@ def main() -> None:
             if args.val_metadata is not None:
                 logger.info("Validation metadata: %s", args.val_metadata)
 
-        if is_streaming_train:
+        if online_hf_chunk_mode:
+            logger.info(
+                "HF online chunk mode is enabled. Selected index pool: %s rows across %s chunks.",
+                len(online_selected_indices or []),
+                online_chunk_count,
+            )
+            logger.info(
+                "Each chunk will be split into train/val with ratio %.4f before training.",
+                args.hf_online_val_ratio,
+            )
+        elif is_local_streaming_train:
             logger.info(
                 "Train records currently available: %s (streaming local metadata mode)",
                 train_dataset.available_record_count(),
             )
+        elif is_streaming_train and hasattr(train_dataset, "planned_record_count"):
+            planned_record_count = train_dataset.planned_record_count()
+            if planned_record_count is None:
+                logger.info(
+                    "Train records will stream directly from Hugging Face without a fixed image cap."
+                )
+            else:
+                logger.info(
+                    "Train records planned for each streaming pass: %s",
+                    planned_record_count,
+                )
         else:
             logger.info("Train records available now: %s", len(train_dataset))
-        if val_dataset is not None:
-            logger.info("Validation records available now: %s", len(val_dataset))
+        if not online_hf_chunk_mode and val_dataset is not None:
+            if hasattr(val_dataset, "planned_record_count"):
+                planned_val_count = val_dataset.planned_record_count()
+                if planned_val_count is None:
+                    logger.info("Validation records will materialize lazily from Hugging Face at first validation pass.")
+                else:
+                    logger.info(
+                        "Validation records planned for lazy materialization: %s",
+                        planned_val_count,
+                    )
+            else:
+                logger.info("Validation records available now: %s", len(val_dataset))
         if dataset_mode == "local" and args.train_index_filter_json is not None:
             logger.info(
                 "Training metadata filter: %s via field '%s'",
                 args.train_index_filter_json,
                 args.metadata_index_field,
             )
-        if dataset_mode == "local" and args.max_train_records is not None:
+        if dataset_mode == "hf" and args.train_index_filter_json is not None:
+            logger.info(
+                "HF training index filter: %s",
+                args.train_index_filter_json,
+            )
+        if dataset_mode == "hf" and args.stream_hf_train:
+            logger.info("HF train split will stream while downloading.")
+        if args.max_train_records is not None:
             logger.info("Training record cap: %s", args.max_train_records)
         logger.info("TensorBoard logs: %s", args.tensorboard_log_dir)
         if args.resume_from_checkpoint is not None:
@@ -1508,6 +2237,10 @@ def main() -> None:
                 "TRELLIS rerank is enabled. Best checkpoint will be chosen by trellis/mean_score and written to %s",
                 args.output_dir / "best_checkpoint",
             )
+            logger.info(
+                "TRELLIS proxy weights: %s",
+                build_trellis_proxy_weights(args).to_dict(),
+            )
 
     progress_bar = tqdm(
         range(args.max_train_steps),
@@ -1520,123 +2253,158 @@ def main() -> None:
     best_metric_name: str | None = None
     best_metric_value: float | None = None
     best_metric_maximize = False
+    final_validation_dataset = val_dataset if not online_hf_chunk_mode else None
+    final_validation_dataloader = val_dataloader if not online_hf_chunk_mode else None
 
-    while global_step < args.max_train_steps:
-        made_progress = False
-        for batch in train_dataloader:
-            made_progress = True
-            with accelerator.accumulate(unet):
-                loss = compute_batch_loss(
-                    batch=batch,
+    if online_hf_chunk_mode:
+        online_epoch = 0
+        while global_step < args.max_train_steps:
+            online_epoch += 1
+            made_progress = False
+            train_source = load_dataset(
+                path=args.dataset_name,
+                name=args.dataset_config_name,
+                split=args.train_split,
+                streaming=True,
+            )
+            chunk_iterator = iterate_hf_row_chunks_by_sorted_indices(
+                dataset=train_source,
+                original_image_column=args.original_image_column,
+                edited_image_column=args.edited_image_column,
+                edit_prompt_column=args.edit_prompt_column,
+                selected_indices=online_selected_indices or [],
+                chunk_size=args.hf_online_chunk_size,
+            )
+
+            for chunk_index, chunk_rows in enumerate(chunk_iterator, start=1):
+                train_rows, val_rows = split_online_chunk_rows(
+                    rows=chunk_rows,
+                    validation_ratio=args.hf_online_val_ratio,
+                    seed=args.seed + online_epoch * 100000 + chunk_index,
+                )
+                if not train_rows:
+                    continue
+
+                made_progress = True
+                if accelerator.is_main_process:
+                    logger.info(
+                        "HF online chunk epoch %s chunk %s/%s: fetched=%s train=%s val=%s",
+                        online_epoch,
+                        chunk_index,
+                        online_chunk_count,
+                        len(chunk_rows),
+                        len(train_rows),
+                        len(val_rows),
+                    )
+
+                chunk_train_dataset = Pix2PixRowsDataset(
+                    rows=train_rows,
+                    tokenizer=tokenizer,
+                    resolution=args.resolution,
+                    prompt_suffix=args.prompt_suffix,
+                    resize_mode=args.resize_mode,
+                )
+                chunk_train_dataloader = DataLoader(
+                    chunk_train_dataset,
+                    batch_size=args.train_batch_size,
+                    shuffle=True,
+                    num_workers=0,
+                    pin_memory=torch.cuda.is_available(),
+                    collate_fn=collate_fn,
+                )
+                chunk_train_dataloader = accelerator.prepare(chunk_train_dataloader)
+
+                chunk_val_dataset = (
+                    Pix2PixRowsDataset(
+                        rows=val_rows,
+                        tokenizer=tokenizer,
+                        resolution=args.resolution,
+                        prompt_suffix=args.prompt_suffix,
+                        resize_mode=args.resize_mode,
+                    )
+                    if val_rows
+                    else None
+                )
+                chunk_val_dataloader = (
+                    DataLoader(
+                        chunk_val_dataset,
+                        batch_size=args.train_batch_size,
+                        shuffle=False,
+                        num_workers=0,
+                        pin_memory=torch.cuda.is_available(),
+                        collate_fn=collate_fn,
+                    )
+                    if chunk_val_dataset is not None
+                    else None
+                )
+
+                global_step, best_metric_name, best_metric_value, best_metric_maximize, _ = train_on_dataloader(
+                    accelerator=accelerator,
+                    args=args,
                     unet=unet,
                     vae=vae,
                     text_encoder=text_encoder,
                     noise_scheduler=noise_scheduler,
-                    accelerator=accelerator,
+                    optimizer=optimizer,
+                    lr_scheduler=lr_scheduler,
+                    train_dataloader=chunk_train_dataloader,
+                    val_dataset=chunk_val_dataset,
+                    val_dataloader=chunk_val_dataloader,
+                    sample_dir=args.sample_dir,
+                    progress_bar=progress_bar,
+                    global_step=global_step,
+                    best_metric_name=best_metric_name,
+                    best_metric_value=best_metric_value,
+                    best_metric_maximize=best_metric_maximize,
                     weight_dtype=weight_dtype,
                     empty_prompt_ids=empty_prompt_ids,
-                    conditioning_dropout_prob=args.conditioning_dropout_prob,
-                    generator=None,
-                    requires_grad=True,
+                    tensorboard_writer=tensorboard_writer,
+                    validation_mode="chunk",
                 )
 
-                accelerator.backward(loss)
+                if global_step >= args.max_train_steps:
+                    break
 
-                if accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(
-                        [
-                            parameter
-                            for parameter in unet.parameters()
-                            if parameter.requires_grad
-                        ],
-                        args.max_grad_norm,
-                    )
-
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
-
-            if accelerator.sync_gradients:
-                global_step += 1
-                loss_value = float(loss.detach().item())
-                lr_value = float(lr_scheduler.get_last_lr()[0])
-                progress_bar.update(1)
-                progress_bar.set_postfix(
-                    loss=f"{loss_value:.4f}",
-                    lr=f"{lr_value:.6f}",
+            if not made_progress:
+                raise RuntimeError(
+                    "HF online chunk mode produced no training chunks. Check your index filter and dataset columns."
                 )
-
-                if tensorboard_writer is not None:
-                    tensorboard_writer.add_scalar("train/loss", loss_value, global_step)
-                    tensorboard_writer.add_scalar("train/learning_rate", lr_value, global_step)
-
-                if (
-                    accelerator.is_main_process
-                    and global_step % args.checkpointing_steps == 0
-                ):
-                    checkpoint_dir = args.output_dir / f"checkpoint-{global_step:06d}"
-                    save_checkpoint(accelerator, unet, checkpoint_dir)
-                    logger.info("Saved checkpoint to %s", checkpoint_dir)
-
-                if val_dataset is not None and global_step % args.validation_steps == 0:
-                    validation_metrics = run_full_validation_cycle(
-                        accelerator=accelerator,
-                        args=args,
-                        unet=unet,
-                        vae=vae,
-                        text_encoder=text_encoder,
-                        noise_scheduler=noise_scheduler,
-                        val_dataset=val_dataset,
-                        val_dataloader=val_dataloader,
-                        sample_dir=args.sample_dir,
-                        global_step=global_step,
-                        weight_dtype=weight_dtype,
-                        empty_prompt_ids=empty_prompt_ids,
-                        tensorboard_writer=tensorboard_writer,
-                    )
-                    metric_info = choose_best_metric(args, validation_metrics)
-                    if metric_info is not None:
-                        metric_name, metric_value, maximize = metric_info
-                        if is_metric_improved(metric_value, best_metric_value, maximize):
-                            best_metric_name = metric_name
-                            best_metric_value = metric_value
-                            best_metric_maximize = maximize
-                            best_metadata = {
-                                "step": global_step,
-                                "metric_name": metric_name,
-                                "metric_value": metric_value,
-                                "maximize": maximize,
-                                "val_loss": validation_metrics.get("val_loss"),
-                                "trellis_summary": validation_metrics.get("trellis_summary"),
-                            }
-                            best_dir = save_best_checkpoint(
-                                accelerator=accelerator,
-                                unet=unet,
-                                output_dir=args.output_dir,
-                                metadata=best_metadata,
-                            )
-                            logger.info(
-                                "Updated best checkpoint at step %s using %s=%.4f -> %s",
-                                global_step,
-                                metric_name,
-                                metric_value,
-                                best_dir,
-                            )
-
-            if global_step >= args.max_train_steps:
-                break
-
-        if not made_progress:
-            if is_streaming_train:
-                if accelerator.is_main_process:
-                    logger.info(
-                        "No filtered local images are available yet. Waiting %.1f seconds before rescanning metadata.",
-                        args.stream_wait_seconds,
-                    )
-                if args.stream_wait_seconds > 0:
-                    time.sleep(args.stream_wait_seconds)
-                continue
-            raise RuntimeError("Training dataloader produced no batches.")
+    else:
+        while global_step < args.max_train_steps:
+            global_step, best_metric_name, best_metric_value, best_metric_maximize, made_progress = train_on_dataloader(
+                accelerator=accelerator,
+                args=args,
+                unet=unet,
+                vae=vae,
+                text_encoder=text_encoder,
+                noise_scheduler=noise_scheduler,
+                optimizer=optimizer,
+                lr_scheduler=lr_scheduler,
+                train_dataloader=train_dataloader,
+                val_dataset=val_dataset,
+                val_dataloader=val_dataloader,
+                sample_dir=args.sample_dir,
+                progress_bar=progress_bar,
+                global_step=global_step,
+                best_metric_name=best_metric_name,
+                best_metric_value=best_metric_value,
+                best_metric_maximize=best_metric_maximize,
+                weight_dtype=weight_dtype,
+                empty_prompt_ids=empty_prompt_ids,
+                tensorboard_writer=tensorboard_writer,
+                validation_mode="step",
+            )
+            if not made_progress:
+                if is_local_streaming_train:
+                    if accelerator.is_main_process:
+                        logger.info(
+                            "No filtered local images are available yet. Waiting %.1f seconds before rescanning metadata.",
+                            args.stream_wait_seconds,
+                        )
+                    if args.stream_wait_seconds > 0:
+                        time.sleep(args.stream_wait_seconds)
+                    continue
+                raise RuntimeError("Training dataloader produced no batches.")
 
     accelerator.wait_for_everyone()
 
@@ -1707,6 +2475,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
 
 
 
