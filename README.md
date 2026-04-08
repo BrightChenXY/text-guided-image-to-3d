@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
-Gradio demo for text-guided image editing with InstructPix2Pix and remote 3D generation powered by a TRELLIS NVIDIA NIM backend. [Quickstart](#quickstart) on **Linux/WSL**.
+Gradio demo for text-guided image editing with InstructPix2Pix front-end across multiple platforms(**Windows/Mac OS/Linux/WSL**) and remote 3D generation powered by a TRELLIS NVIDIA NIM back-end using **docker** deploying on **Linux/WSL**. #[Quickstart](#quickstart)
 
 ## Features
 
