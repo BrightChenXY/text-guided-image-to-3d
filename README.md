@@ -77,7 +77,7 @@ Key files:
 
 # Quickstart<a id="quickstart"></a>
 ## Inference
-### 1. Install Dependencies
+### Ⅰ. Install Dependencies
 Choose one of the following environment setup options.
 #### `conda` setup *(Recommended)*
 
@@ -137,7 +137,7 @@ Expected output on a working GPU setup should show:
 - the name of your NVIDIA GPU
 
 
-### 2. Deploy the TRELLIS Backend
+### Ⅱ. Deploy the TRELLIS Backend
 #### Backend prerequisites
 
 Before starting the container, make sure the backend machine has:
@@ -251,7 +251,7 @@ TRELLIS_BASE_URL = "http://localhost:8000/v1/infer" # Change it to your API
 ```
 If the backend is running on another Linux/WSL machine, replace localhost with that machine’s reachable IP or hostname.
 
-### 3. Run the Front-end App
+### Ⅲ. Run the Front-end App
 
 Launch the Gradio app with:
 
