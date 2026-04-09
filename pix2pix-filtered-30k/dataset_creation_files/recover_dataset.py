@@ -37,6 +37,7 @@ from typing import Dict, Iterable, List, Optional, Set
 
 from PIL import Image
 from datasets import load_dataset
+from tqdm.auto import tqdm
 
 SOURCE_DATASET = "timbrooks/instructpix2pix-clip-filtered"
 
@@ -201,49 +202,78 @@ def main() -> int:
         target_map = {k: target_map[k] for k in limited}
         print(f"Debug limit active: only recovering {len(target_indices):,} rows")
 
+    min_target_idx = min(target_indices)
+    max_target_idx = max(target_indices)
+    scan_total = max_target_idx + 1
+
     print(f"Streaming source dataset: {args.dataset_name}")
+    print(
+        "Progress bars: "
+        f"scan 0..{max_target_idx:,} source rows, "
+        f"recover {len(target_indices):,} selected samples"
+    )
     dataset = load_dataset(args.dataset_name, split="train", streaming=True)
 
     rebuilt_rows: List[dict] = []
     processed = 0
     matched = 0
+    errors = 0
 
     print("Starting recovery...")
-    for idx, sample in enumerate(dataset):
-        if idx not in target_indices:
-            continue
+    scan_pbar = tqdm(total=scan_total, desc="Scanning source dataset", unit="row")
+    recover_pbar = tqdm(
+        total=len(target_indices), desc="Recovered targets", unit="sample"
+    )
 
-        row = dict(target_map[idx])
-        processed += 1
+    try:
+        for idx, sample in enumerate(dataset):
+            scan_pbar.update(1)
 
-        try:
-            src = ensure_rgb(sample["original_image"])
-            tgt = ensure_rgb(sample["edited_image"])
-            prompt = sample["edit_prompt"]
+            if idx not in target_indices:
+                if idx >= max_target_idx:
+                    break
+                continue
 
-            if row.get("edit_prompt") is None:
-                row["edit_prompt"] = prompt
+            row = dict(target_map[idx])
+            processed += 1
 
-            src_rel = row["original_image"]
-            tgt_rel = row["edited_image"]
-            src_abs = args.output_dir / src_rel
-            tgt_abs = args.output_dir / tgt_rel
-            src_abs.parent.mkdir(parents=True, exist_ok=True)
-            tgt_abs.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                src = ensure_rgb(sample["original_image"])
+                tgt = ensure_rgb(sample["edited_image"])
+                prompt = sample["edit_prompt"]
 
-            if not (args.skip_existing and src_abs.exists()):
-                src.save(src_abs)
-            if not (args.skip_existing and tgt_abs.exists()):
-                tgt.save(tgt_abs)
+                if row.get("edit_prompt") is None:
+                    row["edit_prompt"] = prompt
 
-            rebuilt_rows.append(row)
-            matched += 1
+                src_rel = row["original_image"]
+                tgt_rel = row["edited_image"]
+                src_abs = args.output_dir / src_rel
+                tgt_abs = args.output_dir / tgt_rel
+                src_abs.parent.mkdir(parents=True, exist_ok=True)
+                tgt_abs.parent.mkdir(parents=True, exist_ok=True)
 
-            if matched % 500 == 0:
-                print(f"  Recovered {matched:,} samples")
+                if not (args.skip_existing and src_abs.exists()):
+                    src.save(src_abs)
+                if not (args.skip_existing and tgt_abs.exists()):
+                    tgt.save(tgt_abs)
 
-        except Exception as e:
-            print(f"  Skipping dataset index {idx} because of error: {e}")
+                rebuilt_rows.append(row)
+                matched += 1
+
+            except Exception as e:
+                errors += 1
+                print(f"  Skipping dataset index {idx} because of error: {e}")
+
+            recover_pbar.update(1)
+            recover_pbar.set_postfix(scanned=idx + 1, saved=matched, errors=errors)
+            scan_pbar.set_postfix(found=processed, saved=matched, errors=errors)
+
+            if processed >= len(target_indices):
+                break
+
+    finally:
+        scan_pbar.close()
+        recover_pbar.close()
 
     metadata_out = args.output_dir / "metadata.jsonl"
     save_jsonl(rebuilt_rows, metadata_out)

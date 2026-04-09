@@ -37,12 +37,56 @@ row["original_dataset_index"]
 
 ---
 
+
+
+
+
+
+## Run on Google Colab
+
+If you want the easiest guided workflow, use:
+
+- `recover_dataset_colab.ipynb` — step-by-step Colab notebook
+- `recover_dataset.py` — main recovery script
+
+### Colab workflow
+
+1. Open `recover_dataset_colab.ipynb` in Google Colab.
+2. Upload:
+   - `recover_dataset.py`
+   - `final_indices.json`
+   - `metadata.jsonl` (if available)
+3. Run the install cells.
+4. Run the recovery cell.
+5. Verify that:
+   - `original_images/` was created
+   - `edited_images/` was created
+   - `metadata.jsonl` was written
+6. Optionally save the recovered dataset to Google Drive.
+
+### Recommended mode
+
+Use both:
+- `metadata.jsonl`
+- `final_indices.json`
+
+This preserves the exported file layout and filenames.
+
+
+
+
+
+
+
+
+
 ## Files in this folder
 
 - `recover_dataset.py` — main recovery script
 - `README.md` — this guide
 
 ---
+
 
 ## When to use which mode
 
