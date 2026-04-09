@@ -19,7 +19,7 @@ dependencies:
   - pytorch==2.5.1
   - torchaudio==2.5.1
   - torchvision==0.20.1
-  - pytorch-cuda=12.1
+  - cpuonly
   - pip:
       - absl-py==2.4.0
       - accelerate==1.13.0

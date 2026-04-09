@@ -52,8 +52,11 @@ text-guided-image-to-3d/
 │   ├── meshes/
 │   └── previews/
 ├── requirements.txt
+├── requirements_cpu.txt
 ├── environment.yml
+├── environment_cpu.yml
 ├── pyproject.toml
+├── uv.lock
 ├── README.md
 └── README_zh.md
 ```
@@ -75,7 +78,7 @@ text-guided-image-to-3d/
 
 - 仅支持 Python `>=3.10,<3.11`，也就是必须使用 Python 3.10。
 - 需要安装 Git 用于克隆仓库。
-- 需要能够联网下载模型依赖，并访问已配置的 TRELLIS 后端服务。
+- 需要安装Docker用于配置 TRELLIS 后端服务。
 - 建议使用支持 CUDA 的 GPU 以获得更快的本地 InstructPix2Pix 推理速度，CPU 也可运行但会更慢。
 
 ## 项目分支说明
@@ -136,7 +139,9 @@ uv sync
 ```
 
 这个仓库按非打包应用方式配置了 `uv`（`tool.uv.package = false`），因此优先推荐使用 `uv sync`。如果你更习惯基于 `requirements.txt` 的流程，或者本地 `uv` 版本在当前结构下不适合使用 `sync`，也可以改用 `uv pip install -r requirements.txt`。
-`pyproject.toml` 已经配置为让 `uv` 从官方 PyTorch CUDA 12.1 索引拉取 `torch` 和 `torchvision`。
+`pyproject.toml` 现在会把公共依赖精确固定，而 `uv.lock` 会把解析后的环境结果锁定下来，方便不同平台稳定复现。
+默认执行 `uv sync` 时，会安装 `cuda` 依赖组：在 Windows / Linux 上优先从官方 PyTorch CUDA 12.1 索引拉取 `torch`、`torchaudio` 和 `torchvision`；在 macOS 上则会自动回落到标准 CPU wheel。
+如果你需要用 `uv` 创建 CPU-only 环境，请改用 `uv sync --no-default-groups --group cpu`。如果你更习惯 requirements 流程，也可以用 `uv pip install -r requirements.txt` 安装默认路线，或者用 `uv pip install -r requirements_cpu.txt` 安装 CPU-only 路线。
 
 ### `pip` setup *(不推荐)*
 
@@ -148,10 +153,13 @@ source .venv/bin/activate
 # Windows alternative
 # .venv\Scripts\activate
 pip install -r requirements.txt
+# Windows / Linux 下的 CPU-only 安装
+# pip install -r requirements_cpu.txt
 ```
 
 请确认当前环境中的 `python` 指向 Python 3.10。
-`requirements.txt` 现在也固定到了 CUDA 12.1 的 `torch` 和 `torchvision` wheel，因此这条路径同样可以用于 GPU 推理和训练。
+`requirements.txt` 和 `requirements_cpu.txt` 都是精确版本固定，用来和 Conda / `uv` 配置保持一致。
+其中 `requirements.txt` 是默认 pip 路线：在 Windows / Linux 上会优先安装 CUDA 12.1 的 `torch`、`torchaudio` 和 `torchvision`，在 macOS 上则会自动使用 CPU wheel；如果你希望在 Windows / Linux 上走 CPU-only，请使用 `requirements_cpu.txt`。
 
 ### 验证 GPU 是否可用
 
@@ -167,6 +175,8 @@ python -c "import torch; print(torch.__version__); print(torch.cuda.is_available
 - `torch.cuda.is_available()` 为 `True`
 - 类似 `12.1` 的 CUDA runtime 版本
 - 你的 NVIDIA GPU 名称
+
+如果你本来就是按 CPU-only 路线安装的，那么看到 CPU 版 PyTorch 且 `torch.cuda.is_available()` 为 `False` 才是正常结果。
 
 ## ② 部署 TRELLIS 后端
 
@@ -402,7 +412,7 @@ tensorboard --logdir training/outputs/checkpoints/filtered_stream_lora/tensorboa
 - 本地应用负责图像预处理和 InstructPix2Pix 编辑，3D 生成功能会请求已配置的远程 TRELLIS 服务。
 - TRELLIS 接口地址定义在 `config.py` 中；如果后端地址或端口变化，请同步更新配置。
 - 生成结果会写入 `outputs/` 目录，包括编辑后的图片和导出的 `.glb` 文件。
-- `requirements.txt`、`environment.yml` 和 `pyproject.toml` 已对依赖范围做了约束，以保持与 Python 3.10 环境一致。
+- `requirements.txt`、`requirements_cpu.txt`、`environment.yml`、`environment_cpu.yml`、`pyproject.toml` 和 `uv.lock` 都做了版本固定，以保持与 Python 3.10 环境一致。
 
 # 许可证
 

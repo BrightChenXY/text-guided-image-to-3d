@@ -54,8 +54,11 @@ text-guided-image-to-3d/
 │   ├── meshes/
 │   └── previews/
 ├── requirements.txt
+├── requirements_cpu.txt
 ├── environment.yml
+├── environment_cpu.yml
 ├── pyproject.toml
+├── uv.lock
 ├── README.md
 └── README_zh.md
 ```
@@ -76,8 +79,8 @@ Key files:
 ## Requirements
 
 - Python `>=3.10,<3.11` only. Python 3.10 is required for this project.
-- Git for cloning the repository.
-- Network access to download model dependencies and reach the configured TRELLIS backend.
+- `Git` for cloning the repository.
+- `Docker` for deploying TRELLIS backend.
 - A CUDA-capable GPU is recommended for faster local InstructPix2Pix inference, though CPU execution is possible.
   
 ## Project Branch Guide
@@ -116,12 +119,13 @@ Choose one of the following environment setup options.
 ```bash
 git clone https://github.com/BrightChenXY/text-guided-image-to-3d.git
 cd text-guided-image-to-3d
-conda env create -f environment.yml
+conda env create -f environment.yml # if CUDA-capable
+# conda env create -f environment_cpu.yml # if not CUDA-capable
 conda activate text-guided-image-to-3d
 ```
 
 If the environment name inside `environment.yml` is changed locally, activate that exact name or rename it in the file before creating the environment.
-This Conda environment is configured for GPU-ready PyTorch with CUDA 12.1 via `pytorch=2.5.1`, `torchvision=0.20.1`, and `pytorch-cuda=12.1`.
+This Conda environment is configured for GPU-ready PyTorch with CUDA 12.1 via `pytorch=2.5.1`, `torchvision=0.20.1`, and `pytorch-cuda=12.1`. If you don't have a CUDA-capable GPU, run `conda env create -f environment_cpu.yml` instead.
 
 #### `uv` setup *(Recommended)*
 
@@ -136,7 +140,9 @@ uv sync
 ```
 
 This repository is configured as a non-packaged app (`tool.uv.package = false`), so `uv sync` is the preferred workflow. If you prefer a requirements-based flow or your local `uv` setup does not use `sync` here, you can fall back to `uv pip install -r requirements.txt`.
-The `pyproject.toml` file is configured so `uv` pulls `torch` and `torchvision` from the official PyTorch CUDA 12.1 index.
+The `pyproject.toml` file now pins the shared dependencies exactly, while `uv.lock` records the resolved environment for reproducible installs.
+By default, `uv sync` installs the `cuda` dependency group, which prioritizes the official PyTorch CUDA 12.1 wheels for `torch`, `torchaudio`, and `torchvision` on Windows and Linux. On macOS, `uv` falls back to the standard CPU wheels automatically.
+If you need a CPU-only environment with `uv`, run `uv sync --no-default-groups --group cpu` instead. If you prefer a requirements-based flow, use `uv pip install -r requirements.txt` for the default path or `uv pip install -r requirements_cpu.txt` for CPU-only.
 
 #### `pip` setup *(Not Recommended)*
 
@@ -148,10 +154,13 @@ source .venv/bin/activate
 # Windows alternative
 # .venv\Scripts\activate
 pip install -r requirements.txt
+# CPU-only on Windows/Linux
+# pip install -r requirements_cpu.txt
 ```
 
 Make sure the `python` executable in the environment is Python 3.10.
-The `requirements.txt` file pins the CUDA 12.1 wheels for `torch` and `torchvision`, so this route is also suitable for GPU inference and training.
+Both `requirements.txt` and `requirements_cpu.txt` are fully pinned to match the Conda and `uv` setups.
+`requirements.txt` is the default pip route: it prioritizes the CUDA 12.1 wheels for `torch`, `torchaudio`, and `torchvision` on Windows and Linux, while falling back to CPU wheels on macOS. Use `requirements_cpu.txt` when you want a CPU-only install on Windows or Linux.
 
 #### Verify GPU availability
 
@@ -167,6 +176,8 @@ Expected output on a working GPU setup should show:
 - `True` for `torch.cuda.is_available()`
 - a CUDA runtime version such as `12.1`
 - the name of your NVIDIA GPU
+
+If you intentionally chose a CPU-only setup, expect a CPU build instead and `False` for `torch.cuda.is_available()`.
 
 
 ### Ⅱ. Deploy the TRELLIS Backend
@@ -383,7 +394,7 @@ If you reuse the same output directory across multiple runs, TensorBoard will re
 - The local app handles image preprocessing and InstructPix2Pix editing, while 3D generation is sent to the configured TRELLIS backend service.
 - The TRELLIS endpoint is defined in `config.py`; update it if your backend address or port changes.
 - Generated files are written under `outputs/`, including edited images and exported `.glb` assets.
-- Dependency versions are pinned through `requirements.txt`, `environment.yml`, and `pyproject.toml` to keep the setup aligned with Python 3.10.
+- Dependency versions are pinned through `requirements.txt`, `requirements_cpu.txt`, `environment.yml`, `environment_cpu.yml`, `pyproject.toml`, and `uv.lock` to keep the setup aligned with Python 3.10.
 
 
 # License
