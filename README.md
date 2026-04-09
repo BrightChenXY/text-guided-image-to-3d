@@ -1,8 +1,14 @@
 # text-guided-image-to-3d
+[![Contributors](https://img.shields.io/badge/Contributors-Bright_Chen-blue)](https://github.com/BrightChenXY)
+[![Contributors](https://img.shields.io/badge/Contributors-Sambit_Hore-blue)](https://github.com/SamOrTrinity)
+[![Contributors](https://img.shields.io/badge/Contributors-Volkan_Bagdatoglu-blue)](https://github.com/vdbag)
+[![Licnese](https://img.shields.io/badge/License-MIT-orange)](https://github.com/BrightChenXY/text-guided-image-to-3d/blob/main/LICENSE)
+
 
 [English](README.md) | [简体中文](README_zh.md)
 
 Gradio demo for text-guided image editing with InstructPix2Pix front-end across multiple platforms(**Windows/Mac OS/Linux/WSL**) and remote 3D generation powered by a TRELLIS NVIDIA NIM back-end using **docker** deploying on **Linux/WSL**. #[Quickstart](#quickstart)
+
 
 ## Features
 
@@ -74,6 +80,32 @@ Key files:
 - Network access to download model dependencies and reach the configured TRELLIS backend.
 - A CUDA-capable GPU is recommended for faster local InstructPix2Pix inference, though CPU execution is possible.
   
+## Project Branch Guide
+
+This repository is organized across multiple branches depending on which part of the project the user wants to explore.
+
+### 1. InstructPix2Pix Filtered Dataset
+To access the InstructPix2Pix filtered dataset workflow, go to the following branch:
+
+> [BrightChenXY/text-guided-image-to-3d/tree/dataset-processing](https://github.com/BrightChenXY/text-guided-image-to-3d/tree/dataset-processing)
+
+This branch contains the full instructions on how to fetch the filtered original images and edited images.
+
+### 2. EditNet Approach
+To access the EditNet-based approach, including how the EditNet model was trained and the relevant training notebook, go to the following branch:
+
+> [BrightChenXY/text-guided-image-to-3d/tree/trellis-editnet-review](https://github.com/BrightChenXY/text-guided-image-to-3d/tree/trellis-editnet-review)
+
+This branch contains the EditNet training workflow, supporting code, and the notebook used for retraining and experimentation.
+
+### 3. Pseudo Labelling Approach
+To access the pseudo labelling approach, go to the following branch:
+
+> [BrightChenXY/text-guided-image-to-3d/tree/trellis-pseudo_labelling-review](https://github.com/BrightChenXY/text-guided-image-to-3d/tree/trellis-pseudo_labelling-review)
+
+This branch contains the pseudo labelling pipeline and clear instructions on how to reproduce the approach.
+
+*Disclaimer:* There is currently no working Python notebook included for directly trying out this approach, but the branch includes clear written instructions explaining how to run it.
 
 # Quickstart<a id="quickstart"></a>
 ## Inference

@@ -1,8 +1,12 @@
 # text-guided-image-to-3d
+[![Contributors](https://img.shields.io/badge/Contributors-Bright_Chen-blue)](https://github.com/BrightChenXY)
+[![Contributors](https://img.shields.io/badge/Contributors-Sambit_Hore-blue)](https://github.com/SamOrTrinity)
+[![Contributors](https://img.shields.io/badge/Contributors-Volkan_Bagdatoglu-blue)](https://github.com/vdbag)
+[![License](https://img.shields.io/badge/License-MIT-orange)](https://github.com/BrightChenXY/text-guided-image-to-3d/blob/main/LICENSE)
 
 [English](README.md) | [简体中文](README_zh.md)
 
-一个基于 Gradio 的演示项目，支持通过 InstructPix2Pix 进行文本引导图像编辑，并通过 TRELLIS NVIDIA NIM 远程后端生成 3D 结果。在 Linux/WSL 上部署，可直接查看 [Quickstart](#quickstart)。
+一个基于 Gradio 的演示项目，前端使用 InstructPix2Pix 进行文本引导图像编辑，可运行在 **Windows / Mac OS / Linux / WSL**，并通过基于 **Docker**、部署在 **Linux / WSL** 上的 TRELLIS NVIDIA NIM 远程后端生成 3D 结果。可直接查看 [Quickstart](#quickstart)。
 
 ## Features
 
@@ -73,6 +77,36 @@ text-guided-image-to-3d/
 - 需要安装 Git 用于克隆仓库。
 - 需要能够联网下载模型依赖，并访问已配置的 TRELLIS 后端服务。
 - 建议使用支持 CUDA 的 GPU 以获得更快的本地 InstructPix2Pix 推理速度，CPU 也可运行但会更慢。
+
+## 项目分支说明
+
+本仓库按不同研究方向拆分到了多个分支中，便于根据感兴趣的部分分别查看。
+
+### 1. InstructPix2Pix 过滤数据集
+
+如果你想查看 InstructPix2Pix 过滤数据集的处理流程，请前往：
+
+> [BrightChenXY/text-guided-image-to-3d/tree/dataset-processing](https://github.com/BrightChenXY/text-guided-image-to-3d/tree/dataset-processing)
+
+该分支包含如何获取过滤后的 original images 和 edited images 的完整说明。
+
+### 2. EditNet 方法
+
+如果你想查看基于 EditNet 的方案，包括 EditNet 模型的训练方式以及相关训练 notebook，请前往：
+
+> [BrightChenXY/text-guided-image-to-3d/tree/trellis-editnet-review](https://github.com/BrightChenXY/text-guided-image-to-3d/tree/trellis-editnet-review)
+
+该分支包含 EditNet 训练流程、配套代码，以及用于重训练和实验的 notebook。
+
+### 3. Pseudo Labelling 方法
+
+如果你想查看 pseudo labelling 方案，请前往：
+
+> [BrightChenXY/text-guided-image-to-3d/tree/trellis-pseudo_labelling-review](https://github.com/BrightChenXY/text-guided-image-to-3d/tree/trellis-pseudo_labelling-review)
+
+该分支包含 pseudo labelling 流程以及如何复现实验的清晰说明。
+
+*说明：* 该分支目前没有可以直接运行的 Python notebook，但包含了较完整的文字步骤说明，可用于复现实验流程。
 
 # Quickstart<a id="quickstart"></a>
 ## ① 安装依赖
