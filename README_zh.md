@@ -6,7 +6,9 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
-一个基于 Gradio 的演示项目，前端使用 InstructPix2Pix 进行文本引导图像编辑，可运行在 **Windows / Mac OS / Linux / WSL**，并通过基于 **Docker**、部署在 **Linux / WSL** 上的 TRELLIS NVIDIA NIM 远程后端生成 3D 结果。可直接查看 [Quickstart](#quickstart)。
+一个基于 Gradio 的演示项目，前端使用 InstructPix2Pix 进行文本引导图像编辑，可运行在 **Windows / Mac OS / Linux / WSL**，并通过基于 **Docker**、部署在 **Linux / WSL** 上的 TRELLIS NVIDIA NIM 远程后端生成 3D 结果。
+
+快速部署： [![Quickstart](https://img.shields.io/badge/Quickstart_Here-green)](#quickstart)
 
 ## Features
 
